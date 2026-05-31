@@ -1,11 +1,14 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
+import { deleteCloudinaryObject, downloadCloudinaryObject, uploadCloudinaryObject } from "./cloudinary-client.js";
 import { deleteR2Object, downloadR2Object, uploadR2Object } from "./r2-client.js";
 
-export type DocumentStorageDriver = "local" | "r2";
+export type DocumentStorageDriver = "local" | "r2" | "cloudinary";
 
 export function getDocumentStorageDriver(): DocumentStorageDriver {
-  return process.env.DOCUMENT_STORAGE_DRIVER === "r2" ? "r2" : "local";
+  if (process.env.DOCUMENT_STORAGE_DRIVER === "r2") return "r2";
+  if (process.env.DOCUMENT_STORAGE_DRIVER === "cloudinary") return "cloudinary";
+  return "local";
 }
 
 export async function uploadDocumentObject(params: {
@@ -15,6 +18,11 @@ export async function uploadDocumentObject(params: {
 }) {
   if (getDocumentStorageDriver() === "r2") {
     await uploadR2Object(params);
+    return;
+  }
+
+  if (getDocumentStorageDriver() === "cloudinary") {
+    await uploadCloudinaryObject(params);
     return;
   }
 
@@ -28,12 +36,21 @@ export async function downloadDocumentObject(key: string) {
     return downloadR2Object(key);
   }
 
+  if (getDocumentStorageDriver() === "cloudinary") {
+    return downloadCloudinaryObject(key);
+  }
+
   return readFile(getLocalDocumentPath(key));
 }
 
 export async function deleteDocumentObject(key: string) {
   if (getDocumentStorageDriver() === "r2") {
     await deleteR2Object(key);
+    return;
+  }
+
+  if (getDocumentStorageDriver() === "cloudinary") {
+    await deleteCloudinaryObject(key);
     return;
   }
 
