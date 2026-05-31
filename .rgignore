@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.next/
+out/
+*.log
+*.tsbuildinfo
+package-lock.json
+qarobot-backend/documents/

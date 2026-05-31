@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.next/
+out/
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.log
+*.tsbuildinfo
+.runner-work/
+qarobot-runner-worker/.runner-work/
+qarobot-backend/documents/
