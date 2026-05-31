@@ -5,3 +5,5 @@ out
 npm-debug.log*
 *.log
 *.tsbuildinfo
+
+.vercel
