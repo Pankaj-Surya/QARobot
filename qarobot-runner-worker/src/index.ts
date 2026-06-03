@@ -217,7 +217,7 @@ await app.listen({ port, host });
 async function runJob(job: z.infer<typeof jobSchema>, jobId: string) {
   const callbackBaseUrl = job.callbackBaseUrl || process.env.QA_ROBOT_CALLBACK_BASE_URL;
   const started = Date.now();
-  const runDir = prepareRunDir(job.runId, job.script.files);
+  const runDir = prepareRunDir(job.runId, job.script.files, job.script.appUrl);
 
   await postLog(callbackBaseUrl, job.runId, {
     type: "info",
@@ -257,7 +257,7 @@ async function runJob(job: z.infer<typeof jobSchema>, jobId: string) {
   }
 }
 
-function prepareRunDir(runId: string, files: Record<string, string>) {
+function prepareRunDir(runId: string, files: Record<string, string>, appUrl: string) {
   const runDir = runDirectory(runId);
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true });
@@ -271,9 +271,37 @@ function prepareRunDir(runId: string, files: Record<string, string>) {
     writeFileSync(target, content, "utf8");
   }
 
+  writeFileSync(join(runDir, "playwright.config.ts"), workerPlaywrightConfig(appUrl), "utf8");
   linkWorkerNodeModules(runDir);
 
   return runDir;
+}
+
+function workerPlaywrightConfig(appUrl: string) {
+  return `import { defineConfig, devices } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "./tests",
+  timeout: 45_000,
+  retries: 0,
+  reporter: [
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+    ["json", { outputFile: "test-results/results.json" }],
+    ["line"],
+  ],
+  use: {
+    baseURL: process.env.BASE_URL || ${JSON.stringify(appUrl)},
+    trace: "on",
+    screenshot: "on",
+    video: "on",
+  },
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+  ],
+});
+`;
 }
 
 async function executePlaywright(

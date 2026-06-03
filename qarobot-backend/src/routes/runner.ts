@@ -520,9 +520,9 @@ export default defineConfig({
   ],
   use: {
     baseURL: process.env.BASE_URL || ${JSON.stringify(appUrl)},
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    trace: "on",
+    screenshot: "on",
+    video: "on",
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
