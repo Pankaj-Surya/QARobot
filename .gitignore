@@ -8,6 +8,7 @@ out/
 !**/.env.example
 *.log
 *.tsbuildinfo
+.tools/
 .runner-work/
 qarobot-runner-worker/.runner-work/
 qarobot-backend/documents/

@@ -83,6 +83,7 @@ export default function RunnerPage() {
   const discoveredTests = scriptSource === "inline" ? countTests({ "tests/pasted.spec.ts": inlineScriptText }) : selectedScript ? countTests(selectedScript.files) : 0;
   const runAppUrl = scriptSource === "inline" ? inlineAppUrl : selectedScript?.appUrl || "";
   const pastedScriptWarning = scriptSource === "inline" ? detectPastedScriptWarning(inlineScriptText) : "";
+  const runDisabledReason = getRunDisabledReason(scriptSource, selectedScriptId, runAppUrl, inlineName, inlineScriptText, runnerConfig?.workerConfigured);
 
   async function loadData() {
     const [scriptsResult, runsResult] = await Promise.all([
@@ -115,7 +116,13 @@ export default function RunnerPage() {
     setIsTestingWorker(true);
     try {
       await apiPost("/api/runs/test-connection", { workerUrl });
-      setConnectionMessage("Worker connection is healthy.");
+      const result = await apiPut<{ config: RunnerConfig }>("/api/runs/settings", {
+        mode: "worker",
+        workerUrl,
+        callbackBaseUrl,
+      });
+      setRunnerConfig((current) => ({ ...(current || result.config), ...result.config, message: "Runner worker is configured." }));
+      setConnectionMessage("Worker connection is healthy and saved. You can queue a run now.");
     } catch (testError) {
       setConnectionMessage(null);
       setError(readError(testError));
@@ -294,7 +301,7 @@ export default function RunnerPage() {
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <button className="inline-flex items-center justify-center gap-2 rounded-md border border-line px-3 py-2 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" type="button" disabled={isTestingWorker || !workerUrl.trim()} onClick={testWorkerConnection}>
                   {isTestingWorker ? <LoaderCircle className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                  Test connection
+                  Test and save
                 </button>
                 <button className="inline-flex items-center justify-center gap-2 rounded-md bg-action px-3 py-2 font-medium text-white disabled:opacity-60" type="button" disabled={isSavingWorker || !workerUrl.trim()} onClick={saveWorkerConnection}>
                   {isSavingWorker ? <LoaderCircle className="animate-spin" size={16} /> : <PlugZap size={16} />}
@@ -330,7 +337,8 @@ export default function RunnerPage() {
               </div>
             </div>
 
-            <button className="flex w-full items-center justify-center gap-2 rounded-md bg-action px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={isStarting || !canStartRun(scriptSource, selectedScriptId, runAppUrl, inlineName, inlineScriptText, runnerConfig?.workerConfigured)} onClick={startRun}>
+            {runDisabledReason ? <div className="rounded bg-amber-50 p-2 text-xs text-amber-700">{runDisabledReason}</div> : null}
+            <button className="flex w-full items-center justify-center gap-2 rounded-md bg-action px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={isStarting || Boolean(runDisabledReason)} onClick={startRun}>
               {isStarting ? <LoaderCircle className="animate-spin" size={16} /> : <Play size={16} />}
               Queue runner job
             </button>
@@ -754,6 +762,26 @@ function canStartRun(
   if (!workerConfigured) return false;
   if (source === "saved") return Boolean(selectedScriptId && appUrl);
   return Boolean(inlineName.trim() && appUrl.trim() && inlineScriptText.trim());
+}
+
+function getRunDisabledReason(
+  source: "saved" | "inline",
+  selectedScriptId: string,
+  appUrl: string,
+  inlineName: string,
+  inlineScriptText: string,
+  workerConfigured?: boolean,
+) {
+  if (!workerConfigured) return "Test and save the runner worker connection before queuing a run.";
+  if (source === "saved") {
+    if (!selectedScriptId) return "Select a saved or local generated script before queuing a run.";
+    if (!appUrl) return "Selected script has no app URL. Regenerate it with an app URL or paste a script with an app URL.";
+    return "";
+  }
+  if (!inlineName.trim()) return "Enter a run name for the pasted script.";
+  if (!appUrl.trim()) return "Enter the app URL for the pasted script.";
+  if (!inlineScriptText.trim()) return "Paste a Playwright script before queuing a run.";
+  return "";
 }
 
 function readLocalScripts(): Script[] {
