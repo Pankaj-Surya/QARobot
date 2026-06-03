@@ -3,6 +3,7 @@
 import { AppShell } from "@/components/app-shell";
 import { apiGet, apiPost } from "@/lib/api-client";
 import { CheckCircle2, FileWarning, LoaderCircle, Play, Save, Sparkles, Wrench, XCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 type FailedRun = {
@@ -57,6 +58,7 @@ type RunStartResponse = { run: { id: string } };
 type SaveScriptResponse = { script: { id: string; name: string } };
 
 export default function HealerPage() {
+  const router = useRouter();
   const [runs, setRuns] = useState<FailedRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [result, setResult] = useState<HealResponse | null>(null);
@@ -124,7 +126,7 @@ export default function HealerPage() {
     setMessage(null);
     setIsRunning(true);
     try {
-      const response = await apiPost<RunStartResponse>("/api/runs/start", {
+      await apiPost<RunStartResponse>("/api/runs/start", {
         source: "inline",
         name: `${result.run.scriptName} - healed validation`,
         appUrl: result.run.appUrl,
@@ -132,7 +134,7 @@ export default function HealerPage() {
         browser: result.run.browser,
         headed: false,
       });
-      setMessage(`Queued healed script run ${response.run.id}. Open Runner to watch logs and artifacts.`);
+      router.push("/runner");
     } catch (runError) {
       setError(readError(runError));
     } finally {
