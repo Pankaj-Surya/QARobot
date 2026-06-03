@@ -28,7 +28,7 @@ const featureSettingSchema = z.object({
   modelConfigId: z.string().uuid(),
 });
 
-const featureKeySchema = z.enum(["document_chat", "test_plan_generator", "test_case_generator", "test_script_generator"]);
+const featureKeySchema = z.enum(["document_chat", "test_plan_generator", "test_case_generator", "test_script_generator", "test_healer"]);
 
 export async function modelsRoutes(app: FastifyInstance) {
   app.get("/", async () => {

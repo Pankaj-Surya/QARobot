@@ -37,13 +37,14 @@ type FeatureSetting = {
   taskType: TaskType;
 };
 
-type FeatureKey = "document_chat" | "test_plan_generator" | "test_case_generator" | "test_script_generator";
+type FeatureKey = "document_chat" | "test_plan_generator" | "test_case_generator" | "test_script_generator" | "test_healer";
 
 const featureOptions: Array<{ key: FeatureKey; label: string }> = [
   { key: "document_chat", label: "Document Chat" },
   { key: "test_plan_generator", label: "Test Plan Generator" },
   { key: "test_case_generator", label: "Test Case Generator" },
   { key: "test_script_generator", label: "Test Script Generator" },
+  { key: "test_healer", label: "Test Healer" },
 ];
 
 export default function ModelsPage() {
@@ -64,6 +65,7 @@ export default function ModelsPage() {
     test_plan_generator: "",
     test_case_generator: "",
     test_script_generator: "",
+    test_healer: "",
   });
   const [savingFeatureKey, setSavingFeatureKey] = useState<FeatureKey | null>(null);
 
@@ -81,6 +83,7 @@ export default function ModelsPage() {
       test_plan_generator: findFeatureModelId(settingsResult.settings, "test_plan_generator"),
       test_case_generator: findFeatureModelId(settingsResult.settings, "test_case_generator"),
       test_script_generator: findFeatureModelId(settingsResult.settings, "test_script_generator"),
+      test_healer: findFeatureModelId(settingsResult.settings, "test_healer"),
     });
   }
 

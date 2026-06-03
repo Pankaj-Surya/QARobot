@@ -5,7 +5,7 @@ import { modelConfigs, modelFeatureSettings } from "../db/schema.js";
 import { decryptSecret } from "../lib/encryption.js";
 
 export type TaskType = "planning" | "generation" | "scripting" | "healing";
-export type FeatureKey = "document_chat" | "test_plan_generator" | "test_case_generator" | "test_script_generator";
+export type FeatureKey = "document_chat" | "test_plan_generator" | "test_case_generator" | "test_script_generator" | "test_healer";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -82,6 +82,10 @@ export function featureMissingModelMessage(featureKey: FeatureKey) {
 
   if (featureKey === "test_script_generator") {
     return "No model is selected for Test Script Generator. Select one in Models -> Feature Model Selection.";
+  }
+
+  if (featureKey === "test_healer") {
+    return "No model is selected for Test Healer. Select one in Models -> Feature Model Selection.";
   }
 
   return `No model is selected for ${featureKey}.`;

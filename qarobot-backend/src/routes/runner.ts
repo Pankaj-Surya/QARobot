@@ -60,6 +60,7 @@ type RunResults = {
   workerJobId?: string;
   workerError?: string;
   artifacts?: unknown;
+  sourceSpec?: string;
 };
 type RunnableScript = {
   id: string | null;
@@ -207,7 +208,7 @@ export async function runsRoutes(app: FastifyInstance) {
     }
 
     const totalTests = countTests(script.files);
-    const initialResults = makeInitialResults(script.name, script.appUrl, browser, headed, totalTests, [
+    const initialResults = makeInitialResults(script.name, script.appUrl, browser, headed, totalTests, getRunnableSpec(script.files), [
       log("info", `Queued ${script.name} against ${script.appUrl} on ${browser}${headed ? " in headed mode" : ""}.`),
       log("info", `Discovered ${totalTests} generated test${totalTests === 1 ? "" : "s"}.`),
     ]);
@@ -413,7 +414,7 @@ async function appendPersistedLog(runId: string, entry: RunLog) {
   return updated;
 }
 
-function makeInitialResults(scriptName: string, appUrl: string | null, browser: string, headed: boolean, total: number, logs: RunLog[]): RunResults {
+function makeInitialResults(scriptName: string, appUrl: string | null, browser: string, headed: boolean, total: number, sourceSpec: string, logs: RunLog[]): RunResults {
   return {
     mode: "worker",
     status: "queued",
@@ -428,6 +429,7 @@ function makeInitialResults(scriptName: string, appUrl: string | null, browser: 
     durationMs: 0,
     tests: [],
     logs,
+    sourceSpec,
   };
 }
 
@@ -450,6 +452,7 @@ function normalizeResults(value: unknown): RunResults {
     workerJobId: row.workerJobId,
     workerError: row.workerError,
     artifacts: row.artifacts,
+    sourceSpec: typeof row.sourceSpec === "string" ? row.sourceSpec : undefined,
   };
 }
 
@@ -488,11 +491,15 @@ function isWorkerConfigured(settings: RunnerConnectionSettings) {
 }
 
 function countTests(files: Record<string, string>) {
-  const spec = Object.entries(files)
+  const spec = getRunnableSpec(files);
+  return Math.max((spec.match(/\btest\s*\(/g) || []).length, 1);
+}
+
+function getRunnableSpec(files: Record<string, string>) {
+  return files["tests/generated.spec.ts"] || files["tests/pasted.spec.ts"] || Object.entries(files)
     .filter(([file]) => file.endsWith(".spec.ts") || file.endsWith(".test.ts"))
     .map(([, content]) => content)
     .join("\n");
-  return Math.max((spec.match(/\btest\s*\(/g) || []).length, 1);
 }
 
 function buildInlineScriptFiles(name: string, appUrl: string, scriptText: string) {
