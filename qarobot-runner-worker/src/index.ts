@@ -10,6 +10,7 @@ loadLocalEnv();
 
 const jobSchema = z.object({
   runId: z.string().min(1),
+  purpose: z.enum(["normal", "healing_validation"]).optional().default("normal"),
   callbackBaseUrl: z.string().url().nullable().optional(),
   script: z.object({
     id: z.string().min(1),
@@ -20,6 +21,10 @@ const jobSchema = z.object({
   }),
   browser: z.enum(["chromium", "firefox", "webkit"]).default("chromium"),
   headed: z.boolean().optional().default(false),
+});
+
+const validationSchema = jobSchema.omit({ callbackBaseUrl: true }).extend({
+  purpose: z.literal("healing_validation").default("healing_validation"),
 });
 
 const inspectSchema = z.object({
@@ -124,6 +129,52 @@ app.post("/runner/jobs", async (request, reply) => {
   });
 
   return reply.code(202).send({ jobId });
+});
+
+app.post("/runner/validate", async (request, reply) => {
+  const parsed = validationSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "Invalid validation job", details: parsed.error.flatten() });
+  }
+
+  const job = parsed.data;
+  const validationRunId = `heal-${safeName(job.runId)}-${Date.now()}`;
+  const started = Date.now();
+  const runDir = prepareRunDir(validationRunId, job.script.files, job.script.appUrl);
+
+  try {
+    const result = await executePlaywright(runDir, job.script.appUrl, job.browser, job.headed, undefined, validationRunId);
+    const durationMs = Date.now() - started;
+    const report = {
+      ...readPlaywrightReport(runDir, result.stdout, result.stderr, durationMs, job.browser, job.headed, job.script.name, job.script.appUrl),
+      artifacts: artifactManifest(validationRunId, requestUrlBase(request)).artifacts,
+    };
+    const status = result.exitCode === 0 && report.failed === 0 ? "passed" : "failed";
+
+    return {
+      validationRunId,
+      status,
+      report,
+      logs: [
+        {
+          type: status === "passed" ? "done" : "fail",
+          message: result.timedOut ? "Playwright run timed out and was stopped." : `Playwright finished with exit code ${result.exitCode}.`,
+          at: new Date().toISOString(),
+        },
+      ],
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Runner worker failed while validating healed script.";
+    return reply.code(500).send({
+      validationRunId,
+      status: "failed",
+      report: {
+        ...makeFailureReport(job.script.name, job.script.appUrl, job.browser, job.headed, Date.now() - started, message),
+        artifacts: artifactManifest(validationRunId, requestUrlBase(request)).artifacts,
+      },
+      logs: [{ type: "fail", message, at: new Date().toISOString() }],
+    });
+  }
 });
 
 type DomInspectionContext = {
