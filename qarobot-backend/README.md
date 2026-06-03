@@ -2,11 +2,15 @@
 
 Fastify TypeScript backend for QA Robot.
 
+For the full project guide, architecture, deployed usage, and feature documentation, see the root [README.md](../README.md).
+
 ## Prerequisites
 
 - Node.js 20 or newer.
 - A Neon PostgreSQL database URL.
-- Cloudflare R2 is optional for now. Local document storage is the default.
+- Local document storage is the default for development.
+- Cloudinary raw storage is supported for deployed no-card document storage.
+- Cloudflare R2/S3-compatible storage can be enabled later.
 
 ## Environment Setup
 
@@ -41,6 +45,10 @@ QSTASH_NEXT_SIGNING_KEY="your-next-qstash-signing-key"
 # R2_ACCESS_KEY_ID="your-r2-access-key-id"
 # R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
 # R2_BUCKET_NAME="your-r2-bucket-name"
+
+# Use Cloudinary for deployed no-card raw document storage.
+# DOCUMENT_STORAGE_DRIVER="cloudinary"
+# CLOUDINARY_URL="cloudinary://api_key:api_secret@cloud_name"
 ```
 
 Where to get the values:
@@ -64,7 +72,7 @@ Keep `.env` local. It is intentionally ignored by git.
 
 ## Storage Mode
 
-The backend currently supports two document storage modes.
+The backend currently supports local, Cloudinary, and optional R2 document storage modes.
 
 Local mode is the default and needs no payment card:
 
@@ -74,6 +82,13 @@ LOCAL_DOCUMENT_STORAGE_DIR="documents"
 ```
 
 Uploaded files are saved under `qarobot-backend/documents/`. This folder is ignored by git.
+
+Cloudinary mode can be used for deployed storage without Cloudflare R2:
+
+```bash
+DOCUMENT_STORAGE_DRIVER="cloudinary"
+CLOUDINARY_URL="cloudinary://api_key:api_secret@cloud_name"
+```
 
 R2 mode can be enabled later:
 

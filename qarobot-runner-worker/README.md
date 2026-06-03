@@ -2,6 +2,8 @@
 
 This is the separate Playwright execution service for QA Robot. Install Playwright and browser binaries here, not in the main backend. The same worker supports both execution options:
 
+For the full project guide and runner setup with Cloudflare Tunnel or VM deployment, see the root [README.md](../README.md) and [Test Runner guide](../docs/features/test-runner.md).
+
 - Local Machine Runner: run this service on your laptop for development.
 - Cloud/VM Worker: deploy this service to a VM, Railway, Render, Fly.io, or another Docker-capable host for production.
 
@@ -41,6 +43,10 @@ The main Vercel/API app creates queued runs and sends jobs to this worker. The w
 ## Endpoints
 
 - `GET /health`
+- `POST /inspect`
 - `POST /runner/jobs`
+- `POST /runner/validate`
+- `GET /runner/runs/:runId/artifacts`
+- `GET /artifacts/:runId/*`
 
 The backend calls `POST /runner/jobs`; users normally do not call it directly.

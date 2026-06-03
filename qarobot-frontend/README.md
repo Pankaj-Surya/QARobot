@@ -2,6 +2,8 @@
 
 Next.js 14 TypeScript frontend for QA Robot.
 
+For the full project guide, architecture, deployed usage, and feature documentation, see the root [README.md](../README.md).
+
 ## Run
 
 ```bash
