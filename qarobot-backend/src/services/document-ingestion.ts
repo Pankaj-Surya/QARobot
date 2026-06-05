@@ -18,6 +18,16 @@ export async function ingestDocument(documentId: string) {
   return ingestDocumentRow(document);
 }
 
+export async function ingestDocumentBuffer(documentId: string, buffer: Buffer) {
+  const [document] = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1);
+
+  if (!document) {
+    throw new Error("Document not found");
+  }
+
+  return ingestDocumentRow(document, buffer);
+}
+
 export async function rebuildDocumentIngestion() {
   const existingVectors = await db.select({ vectorId: documentChunks.vectorId }).from(documentChunks);
   await deleteVectors(existingVectors.map((chunk) => chunk.vectorId));
@@ -128,14 +138,14 @@ async function deleteDocumentRows(targetDocuments: DocumentRow[]) {
   };
 }
 
-async function ingestDocumentRow(document: DocumentRow) {
+async function ingestDocumentRow(document: DocumentRow, providedBuffer?: Buffer) {
   try {
     await db
       .update(documents)
       .set({ status: "processing", errorMessage: null })
       .where(eq(documents.id, document.id));
 
-    const buffer = await downloadDocumentObject(document.r2Key);
+    const buffer = providedBuffer || await downloadDocumentObject(document.r2Key);
     const text = await extractTextFromDocument(buffer, document.fileType, document.name);
     const chunks = chunkDocument(text, document.fileType, document.name);
 

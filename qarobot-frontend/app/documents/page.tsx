@@ -180,7 +180,8 @@ export default function DocumentsPage() {
       formData.append("file", file);
       const uploaded = await apiUploadWithProgress<{
         document: DocumentRow;
-        next: { payload: { documentId: string } };
+        chunksIndexed?: number;
+        next: { payload: { documentId: string } } | null;
       }>(
         "/api/documents/upload",
         formData,
@@ -226,7 +227,9 @@ export default function DocumentsPage() {
         });
       }, 2500);
 
-      await apiPost("/api/documents/process", uploaded.next.payload);
+      if (uploaded.next?.payload) {
+        await apiPost("/api/documents/process", uploaded.next.payload);
+      }
       if (progressTimer) window.clearInterval(progressTimer);
       setUploadProgress((current) => ({
         percent: 100,

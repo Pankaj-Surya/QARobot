@@ -13,6 +13,7 @@ import {
   deleteAllDocumentSources,
   deleteDocumentSource,
   ingestDocument,
+  ingestDocumentBuffer,
   rebuildDocumentIngestion,
 } from "../services/document-ingestion.js";
 
@@ -197,13 +198,13 @@ export async function documentsRoutes(app: FastifyInstance) {
         status: "processing",
       })
       .returning();
+    const ingestion = await ingestDocumentBuffer(document.id, buffer);
+    const [updatedDocument] = await db.select().from(documents).where(eq(documents.id, document.id)).limit(1);
 
     return reply.code(201).send({
-      document,
-      next: {
-        processEndpoint: "/api/documents/process",
-        payload: { documentId: document.id },
-      },
+      document: updatedDocument || document,
+      chunksIndexed: ingestion.chunksIndexed,
+      next: null,
     });
   });
 
