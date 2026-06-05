@@ -28,6 +28,13 @@ export async function ragRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Invalid RAG Project request", details: parsed.error.flatten() });
     }
 
+    const existing = (await listRagProjects()).find(
+      (project) => project.name.trim().toLowerCase() === parsed.data.name.trim().toLowerCase(),
+    );
+    if (existing) {
+      return reply.code(200).send({ project: existing });
+    }
+
     const [project] = await db.insert(ragProjects).values({
       ...parsed.data,
       description: parsed.data.description || null,

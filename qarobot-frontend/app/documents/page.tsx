@@ -112,7 +112,7 @@ export default function DocumentsPage() {
       apiGet<{ projects: RagProject[] }>("/api/rag/projects"),
     ]);
     setDocuments(result.documents);
-    setProjects(projectsResult.projects);
+    setProjects(dedupeProjects(projectsResult.projects));
   }
 
   async function createProject() {
@@ -123,7 +123,7 @@ export default function DocumentsPage() {
         name: newProjectName.trim(),
         aliases: [newProjectName.trim()],
       });
-      setProjects((current) => [{ ...result.project, documentCount: 0, sourceTypes: [] }, ...current]);
+      setProjects((current) => dedupeProjects([{ ...result.project, documentCount: 0, sourceTypes: [] }, ...current]));
       setUploadProjectId(result.project.id);
       setNewProjectName("");
     } catch (createError) {
@@ -188,9 +188,10 @@ export default function DocumentsPage() {
     let progressTimer: number | undefined;
 
     try {
+      const resolvedProjectId = await ensureUploadProject();
       const formData = new FormData();
       formData.append("file", file);
-      if (uploadProjectId) formData.append("ragProjectId", uploadProjectId);
+      formData.append("ragProjectId", resolvedProjectId);
       formData.append("sourceType", uploadSourceType);
       const uploaded = await apiUploadWithProgress<{
         document: DocumentRow;
@@ -265,6 +266,32 @@ export default function DocumentsPage() {
         setUploadProgress((current) => (current?.phase === "Ingestion complete" ? null : current));
       }, 3500);
     }
+  }
+
+  async function ensureUploadProject() {
+    if (uploadProjectId) return uploadProjectId;
+
+    const projectName = newProjectName.trim();
+    if (!projectName) {
+      throw new Error("Select an existing RAG Project or enter a new RAG Project name before uploading.");
+    }
+
+    const existing = projects.find((project) => project.name.trim().toLowerCase() === projectName.toLowerCase());
+    if (existing) {
+      setUploadProjectId(existing.id);
+      setNewProjectName("");
+      return existing.id;
+    }
+
+    const result = await apiPost<{ project: RagProject }>("/api/rag/projects", {
+      name: projectName,
+      aliases: [projectName],
+    });
+    const project = { ...result.project, documentCount: 0, sourceTypes: [] };
+    setProjects((current) => dedupeProjects([project, ...current]));
+    setUploadProjectId(project.id);
+    setNewProjectName("");
+    return project.id;
   }
 
   async function askDocuments() {
@@ -388,11 +415,11 @@ export default function DocumentsPage() {
         )}
         <div className="text-sm font-medium">{isUploading ? "Uploading document" : "Drop or choose a document"}</div>
         <p className="mt-2 text-sm text-slate-500">PDF, TXT, CSV, Markdown, JSON, YAML, and Gherkin files are accepted.</p>
-        {!uploadProjectId ? <p className="mt-2 text-sm font-medium text-amber-700">Create or select a RAG Project before uploading.</p> : null}
+        {!uploadProjectId && !newProjectName.trim() ? <p className="mt-2 text-sm font-medium text-amber-700">Select a RAG Project or enter a new project name before uploading.</p> : null}
         <input
           className="sr-only"
           type="file"
-          disabled={isUploading || !uploadProjectId}
+          disabled={isUploading || (!uploadProjectId && !newProjectName.trim())}
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) {
@@ -403,17 +430,17 @@ export default function DocumentsPage() {
       </label>
 
       <div className="mt-4 rounded-md border border-line bg-white p-4">
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px_220px_auto] md:items-end">
+        <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)_220px_auto] md:items-end">
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">Create RAG Project</span>
-            <input className="w-full rounded-md border border-line px-3 py-2" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Example: BStackDemo" />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">Upload project</span>
-            <select className="w-full rounded-md border border-line px-3 py-2" value={uploadProjectId} onChange={(event) => setUploadProjectId(event.target.value)}>
-              <option value="">Select project</option>
+            <span className="mb-1 block font-medium text-slate-700">RAG Project</span>
+            <select className="w-full rounded-md border border-line px-3 py-2" value={uploadProjectId} onChange={(event) => { setUploadProjectId(event.target.value); if (event.target.value) setNewProjectName(""); }}>
+              <option value="">Use new project name</option>
               {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
             </select>
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">New project name</span>
+            <input className="w-full rounded-md border border-line px-3 py-2" value={newProjectName} onChange={(event) => { setNewProjectName(event.target.value); if (event.target.value.trim()) setUploadProjectId(""); }} placeholder="Example: BStackDemo" />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block font-medium text-slate-700">Source type</span>
@@ -425,7 +452,7 @@ export default function DocumentsPage() {
             Create
           </button>
         </div>
-        <div className="mt-2 text-xs text-slate-500">Use projects to keep product requirements, test cases, plans, and API docs grouped by app/product. Documents cannot be uploaded without a project.</div>
+        <div className="mt-2 text-xs text-slate-500">Select an existing project or type a new project name. Upload will use that project and then run the RAG ingestion pipeline.</div>
       </div>
 
       {uploadProgress ? (
@@ -649,6 +676,16 @@ function StatusBadge({ status }: { status: DocumentStatus }) {
 
 function readError(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong";
+}
+
+function dedupeProjects(projects: RagProject[]) {
+  const seen = new Set<string>();
+  return projects.filter((project) => {
+    const key = project.name.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function formatBytes(bytes: number) {
