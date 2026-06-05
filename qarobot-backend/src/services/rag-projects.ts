@@ -54,7 +54,7 @@ export async function listRagProjects() {
     })
     .from(documents);
 
-  return projects.map((project) => {
+  const hydrated = projects.map((project) => {
     const docs = counts.filter((row) => row.id === project.id);
     return {
       ...project,
@@ -62,6 +62,17 @@ export async function listRagProjects() {
       sourceTypes: Array.from(new Set(docs.map((row) => row.sourceType).filter(Boolean))),
     };
   });
+
+  const byName = new Map<string, (typeof hydrated)[number]>();
+  for (const project of hydrated) {
+    const key = normalizeProjectName(project.name);
+    const existing = byName.get(key);
+    if (!existing || project.documentCount > existing.documentCount) {
+      byName.set(key, project);
+    }
+  }
+
+  return Array.from(byName.values());
 }
 
 export async function resolveRagProject(input: {
@@ -259,4 +270,8 @@ function extractDomains(value: string) {
 function metadataText(metadata: unknown) {
   if (!metadata || typeof metadata !== "object") return "";
   return JSON.stringify(metadata).slice(0, 1200);
+}
+
+function normalizeProjectName(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
