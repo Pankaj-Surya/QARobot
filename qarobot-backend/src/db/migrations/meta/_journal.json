@@ -50,6 +50,13 @@
       "when": 1779979000000,
       "tag": "0006_nullable_run_script",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780000000000,
+      "tag": "0007_rag_projects",
+      "breakpoints": true
     }
   ]
 }

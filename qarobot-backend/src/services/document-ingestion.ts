@@ -154,6 +154,8 @@ async function ingestDocumentRow(document: DocumentRow) {
         metadata: {
           documentId: document.id,
           documentName: document.name,
+          ragProjectId: document.ragProjectId,
+          sourceType: document.sourceType,
           chunkIndex: chunk.chunkIndex,
           chunkKind: chunk.chunkKind,
           sourceLocator: chunk.sourceLocator,
@@ -171,7 +173,11 @@ async function ingestDocumentRow(document: DocumentRow) {
           vectorId: `${document.id}:${chunk.chunkIndex}`,
           chunkKind: chunk.chunkKind,
           sourceLocator: chunk.sourceLocator,
-          metadata: chunk.metadata,
+          metadata: {
+            ...chunk.metadata,
+            ragProjectId: document.ragProjectId,
+            sourceType: document.sourceType,
+          },
           tokenCount: chunk.tokenCount,
           embeddingModel: embeddingModelName,
         })),

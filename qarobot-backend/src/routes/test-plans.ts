@@ -5,10 +5,14 @@ import { db } from "../db/client.js";
 import { testPlans } from "../db/schema.js";
 import { retrieveContext } from "../services/rag-service.js";
 import { generateWithFeatureModel } from "../services/ai-adapter.js";
+import { inspectAppPage } from "../services/page-inspection.js";
+import { resolveRagProject } from "../services/rag-projects.js";
 
 const generatePlanSchema = z.object({
   name: z.string().optional(),
   scope: z.string().min(1),
+  appUrl: z.string().url().optional().or(z.literal("")),
+  ragProjectId: z.string().uuid().optional().nullable(),
   documentIds: z.array(z.string().uuid()).optional().default([]),
 });
 
@@ -32,7 +36,23 @@ export async function testPlansRoutes(app: FastifyInstance) {
     }
 
     const body = parsed.data;
-    const context = await retrieveContext(body.scope, [], { topK: 8, intent: "test_plan" });
+    const projectContext = await resolveRagProject({
+      ragProjectId: body.ragProjectId,
+      appUrl: body.appUrl || null,
+      requirementText: body.scope,
+    });
+
+    if (projectContext.usage.mode === "ambiguous") {
+      return reply.code(409).send({
+        error: projectContext.usage.reason,
+        ragUsage: projectContext.usage,
+      });
+    }
+
+    const context = projectContext.documentIds.length > 0
+      ? await retrieveContext(body.scope, projectContext.documentIds, { topK: 8, intent: "test_plan" })
+      : { chunks: [], retrieval: undefined };
+    const pageContext = body.appUrl ? await inspectAppPage(body.appUrl) : null;
 
     let content: string;
     try {
@@ -44,7 +64,7 @@ export async function testPlansRoutes(app: FastifyInstance) {
         },
         {
           role: "user",
-          content: `Plan name: ${body.name || "QA Test Plan"}\n\nScope / requirement:\n${body.scope}\n\nRequired sections:\nTitle, Scope, Objective, Source Requirement Summary, In Scope, Out Of Scope, Test Strategy, Test Scenario Matrix, Test Data, Entry Criteria, Exit Criteria, Risks.\n\nRetrieved RAG evidence:\n${formatEvidence(context.chunks) || "No relevant RAG evidence was retrieved."}`,
+          content: `Plan name: ${body.name || "QA Test Plan"}\n\nScope / requirement:\n${body.scope}\n\nRAG usage:\n${formatRagUsage(projectContext.usage)}\n\nLive app context:\n${formatPageContext(pageContext)}\n\nRequired sections:\nTitle, Scope, Objective, Source Requirement Summary, In Scope, Out Of Scope, Test Strategy, Test Scenario Matrix, Test Data, Entry Criteria, Exit Criteria, Risks.\n\nRetrieved RAG evidence:\n${formatEvidence(context.chunks) || "No matching RAG evidence was used. Generate from the requirement and live app context only, and clearly mark assumptions."}`,
         },
       ]);
     } catch (error) {
@@ -53,8 +73,12 @@ export async function testPlansRoutes(app: FastifyInstance) {
       });
     }
 
-    reply.header("content-type", "text/plain; charset=utf-8");
-    return content;
+    return {
+      content,
+      ragUsage: projectContext.usage,
+      retrieval: context.retrieval,
+      liveAppContext: pageContext,
+    };
   });
 
   app.post("/save", async (request, reply) => {
@@ -95,6 +119,27 @@ function formatMetadataFields(metadata: Record<string, unknown> | undefined) {
       return `${String(row.originalKey || row.normalizedKey)}: ${String(row.value)}`;
     })
     .join("\n");
+}
+
+function formatRagUsage(usage: Awaited<ReturnType<typeof resolveRagProject>>["usage"]) {
+  if (usage.mode === "used") {
+    return `RAG Project: ${usage.projectName}\nReason: ${usage.reason}\nSource types: ${usage.sourceTypes.join(", ") || "unknown"}`;
+  }
+
+  return `${usage.reason}\nDo not invent source evidence.`;
+}
+
+function formatPageContext(pageContext: Awaited<ReturnType<typeof inspectAppPage>> | null) {
+  if (!pageContext) return "No App URL was provided.";
+  return [
+    `Mode: ${pageContext.mode}`,
+    pageContext.title ? `Title: ${pageContext.title}` : "",
+    pageContext.finalUrl ? `Final URL: ${pageContext.finalUrl}` : "",
+    pageContext.headings?.length ? `Headings: ${pageContext.headings.slice(0, 8).join(" | ")}` : "",
+    pageContext.buttons?.length ? `Buttons: ${pageContext.buttons.slice(0, 12).map((button) => button.text || button.selectorHint).join(" | ")}` : "",
+    pageContext.inputs?.length ? `Inputs: ${pageContext.inputs.slice(0, 12).map((input) => input.label || input.placeholder || input.type).join(" | ")}` : "",
+    pageContext.warnings?.length ? `Warnings: ${pageContext.warnings.join(" ")}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function buildDraftPlan(

@@ -6,7 +6,7 @@ import { runnerSettings, testCases, testScripts } from "../db/schema.js";
 import { featureMissingModelMessage, generateWithFeatureModel, testFeatureModelConnection, type ChatMessage } from "../services/ai-adapter.js";
 import { inspectAppPage, type PageInspectionContext } from "../services/page-inspection.js";
 
-const generationModeSchema = z.enum(["llm_dom", "llm_only", "deterministic_dom", "deterministic_only"]);
+const generationModeSchema = z.enum(["stable_auto", "llm_dom", "llm_only", "deterministic_dom", "deterministic_only"]);
 
 const generateScriptSchema = z
   .object({
@@ -83,6 +83,7 @@ export async function scriptsRoutes(app: FastifyInstance) {
     }
 
     const config = parsed.data;
+    const stableMode = config.generationMode === "stable_auto";
     const requiresLlm = isLlmMode(config.generationMode);
     const requiresDom = isDomMode(config.generationMode);
     const cases = config.inputMode === "saved" ? await loadSavedCases(config.testCaseIds) : buildManualCases(config.manualTestCaseText);
@@ -91,8 +92,11 @@ export async function scriptsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "No test cases found for script generation." });
     }
 
-    const pageContext = requiresDom ? await inspectAppPage(config.appUrl, await loadInspectionWorkerUrl()) : buildUnavailablePageContext(config.appUrl, "DOM inspection was not requested for this generation mode.");
-    if (requiresDom && pageContext.mode !== "external_browser") {
+    const workerUrl = await loadInspectionWorkerUrl();
+    const pageContext = requiresDom || stableMode
+      ? await inspectAppPage(config.appUrl, workerUrl)
+      : buildUnavailablePageContext(config.appUrl, "DOM inspection was not requested for this generation mode.");
+    if (requiresDom && !stableMode && pageContext.mode !== "external_browser") {
       return reply.code(400).send({
         error: `DOM inspection is required for ${generationModeLabel(config.generationMode)}, but the runner inspection worker is not available. Test the generation configuration, start the runner worker, or choose an option without DOM inspection.`,
         pageContext,
@@ -100,10 +104,13 @@ export async function scriptsRoutes(app: FastifyInstance) {
     }
 
     const warnings = [...pageContext.warnings];
+    if (stableMode && pageContext.mode !== "external_browser") {
+      warnings.push("Live DOM inspection was blocked or unavailable. Script generated from testcase/RAG/manual input instead.");
+    }
     let files = buildPlaywrightFiles(cases, config, pageContext, warnings);
     let modelUsed = false;
 
-    if (requiresLlm) {
+    if (requiresLlm || stableMode) {
       try {
         const generated = await generateFilesWithModel(cases, config, pageContext);
         files = mergeRequiredFiles(generated.files, cases, config, pageContext, generated.warnings || warnings);
@@ -111,14 +118,26 @@ export async function scriptsRoutes(app: FastifyInstance) {
         modelUsed = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Scripting model generation failed.";
+        if (stableMode) {
+          warnings.push(`Scripting model unavailable for Stable Auto Generate; deterministic script was produced instead. ${message}`);
+        } else {
         return reply.code(400).send({
           error:
             message === featureMissingModelMessage("test_script_generator")
               ? `${message} This generation mode requires an LLM. Choose a deterministic mode or configure and test the Test Script Generator model.`
               : `Scripting model failed for ${generationModeLabel(config.generationMode)}. ${message}`,
         });
+        }
       }
     }
+
+    const validation: { status: "validated" | "partially_validated" | "unvalidated" | "not_requested"; attempts: number; report?: unknown; warning?: string } = stableMode
+      ? await validateGeneratedScript(workerUrl, config, files).catch((error) => ({
+          status: "unvalidated" as const,
+          attempts: 1,
+          warning: error instanceof Error ? error.message : "Script validation failed before completion.",
+        }))
+      : { status: "not_requested" as const, attempts: 0 };
 
     return reply.code(201).send({
       script: {
@@ -136,11 +155,14 @@ export async function scriptsRoutes(app: FastifyInstance) {
           modelUsed,
           domInspectionRequired: requiresDom,
           domInspectionMode: pageContext.mode,
-          deterministicUsed: !requiresLlm,
+          deterministicUsed: !modelUsed,
+          validationStatus: validation.status,
+          validationAttempts: validation.attempts,
         },
         manualTestCaseText: config.inputMode === "manual" ? config.manualTestCaseText : null,
         pageContext,
-        generationWarnings: unique(warnings),
+        generationWarnings: unique(validation.warning ? [...warnings, validation.warning] : warnings),
+        validation,
         createdAt: new Date().toISOString(),
         storage: "local",
       },
@@ -213,12 +235,61 @@ function isDomMode(mode: GenerateScriptConfig["generationMode"]) {
 
 function generationModeLabel(mode: GenerateScriptConfig["generationMode"]) {
   const labels: Record<GenerateScriptConfig["generationMode"], string> = {
+    stable_auto: "Stable Auto Generate",
     llm_dom: "LLM + DOM inspection",
     llm_only: "LLM only",
     deterministic_dom: "Deterministic fallback + DOM inspection",
     deterministic_only: "Deterministic fallback only",
   };
   return labels[mode];
+}
+
+async function validateGeneratedScript(
+  workerUrl: string,
+  config: GenerateScriptConfig,
+  files: Record<string, string>,
+): Promise<{ status: "validated" | "partially_validated" | "unvalidated"; attempts: number; report?: unknown; warning?: string }> {
+  if (!workerUrl) {
+    return {
+      status: "unvalidated",
+      attempts: 0,
+      warning: "Runner worker is not configured, so Stable Auto Generate could not validate this script.",
+    };
+  }
+
+  const response = await fetch(`${workerUrl.replace(/\/$/, "")}/runner/validate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      runId: `scriptgen-${Date.now()}`,
+      purpose: "healing_validation",
+      browser: "chromium",
+      headed: false,
+      script: {
+        name: config.name,
+        appUrl: config.appUrl,
+        files,
+      },
+    }),
+  });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) as { status?: string; report?: unknown } : {};
+  if (!response.ok) {
+    return {
+      status: "unvalidated",
+      attempts: 1,
+      report: payload,
+      warning: `Runner validation failed with ${response.status}: ${text.slice(0, 500)}`,
+    };
+  }
+
+  return {
+    status: payload.status === "passed" ? "validated" : "partially_validated",
+    attempts: 1,
+    report: payload.report,
+    warning: payload.status === "passed" ? undefined : "Generated script did not fully pass validation. Review runner report before using it.",
+  };
 }
 
 function buildUnavailablePageContext(appUrl: string, warning: string): PageInspectionContext {

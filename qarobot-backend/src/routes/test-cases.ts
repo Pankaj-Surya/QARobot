@@ -5,9 +5,13 @@ import { db } from "../db/client.js";
 import { testCases } from "../db/schema.js";
 import { retrieveContext } from "../services/rag-service.js";
 import { generateWithFeatureModel, type ChatMessage } from "../services/ai-adapter.js";
+import { inspectAppPage } from "../services/page-inspection.js";
+import { resolveRagProject } from "../services/rag-projects.js";
 
 const generateCasesSchema = z.object({
   featureDescription: z.string().min(1),
+  appUrl: z.string().url().optional().or(z.literal("")),
+  ragProjectId: z.string().uuid().optional().nullable(),
   documentIds: z.array(z.string().uuid()).optional().default([]),
   count: z.number().int().min(1).max(20).optional().default(5),
   mode: z.enum(["balanced", "positive", "negative", "regression"]).optional().default("balanced"),
@@ -66,14 +70,33 @@ export async function testCasesRoutes(app: FastifyInstance) {
       });
     }
 
-    const { featureDescription, count, mode } = parsed.data;
-    const context = await retrieveContext(featureDescription, [], { topK: Math.max(count, 6), intent: "test_case" });
+    const { featureDescription, count, mode, appUrl, ragProjectId } = parsed.data;
+    const projectContext = await resolveRagProject({
+      ragProjectId,
+      appUrl: appUrl || null,
+      requirementText: featureDescription,
+    });
+
+    if (projectContext.usage.mode === "ambiguous") {
+      return reply.code(409).send({
+        error: projectContext.usage.reason,
+        ragUsage: projectContext.usage,
+      });
+    }
+
+    const context = projectContext.documentIds.length > 0
+      ? await retrieveContext(featureDescription, projectContext.documentIds, { topK: Math.max(count, 6), intent: "test_case" })
+      : { chunks: [], retrieval: undefined };
+    const pageContext = appUrl ? await inspectAppPage(appUrl) : null;
 
     try {
-      const messages = buildCaseGenerationMessages(featureDescription, mode, count, context.chunks);
+      const messages = buildCaseGenerationMessages(featureDescription, mode, count, context.chunks, {
+        ragUsage: projectContext.usage,
+        pageContext,
+      });
       const output = await generateWithFeatureModel("test_case_generator", messages);
       const cases = await parseGeneratedCases(output, messages, count);
-      return { cases, retrieval: context.retrieval };
+      return { cases, retrieval: context.retrieval, ragUsage: projectContext.usage, liveAppContext: pageContext };
     } catch (error) {
       return reply.code(400).send({
         error: error instanceof Error ? error.message : "LLM test case generation failed",
@@ -110,6 +133,10 @@ function buildCaseGenerationMessages(
   mode: "balanced" | "positive" | "negative" | "regression",
   count: number,
   chunks: Array<{ documentName: string; sourceLocator: string | null; chunkIndex: number; fullText: string; metadata?: Record<string, unknown> }>,
+  context: {
+    ragUsage: Awaited<ReturnType<typeof resolveRagProject>>["usage"];
+    pageContext: Awaited<ReturnType<typeof inspectAppPage>> | null;
+  },
 ): ChatMessage[] {
   return [
     {
@@ -119,7 +146,7 @@ function buildCaseGenerationMessages(
     },
     {
       role: "user",
-      content: `Feature requirement:\n${featureDescription}\n\nMode: ${mode}\nCount: ${count}\n\nReturn exactly ${count} Jira-ready test cases inside {"cases":[...]}. Each case must include string fields title, module, testType, priority, expectedResult, automationStatus; nullable string fields preconditions and testData; and steps as an array of strings.\n\nIf the requirement mentions domain-based SSO login, cover: Google domain disables password and shows Google icon; Microsoft domain disables password and shows Microsoft icon; clicking provider sign-in opens SSO; non-configured domain keeps password login enabled; changing username domain updates login mode; blank/malformed username does not trigger SSO.\n\nRetrieved RAG evidence:\n${formatEvidence(chunks) || "No relevant RAG evidence was retrieved. Use the feature requirement and mark reasonable QA assumptions in preconditions where needed."}`,
+      content: `Feature requirement:\n${featureDescription}\n\nMode: ${mode}\nCount: ${count}\n\nRAG usage:\n${formatRagUsage(context.ragUsage)}\n\nLive app context:\n${formatPageContext(context.pageContext)}\n\nReturn exactly ${count} Jira-ready test cases inside {"cases":[...]}. Each case must include string fields title, module, testType, priority, expectedResult, automationStatus; nullable string fields preconditions and testData; and steps as an array of strings.\n\nIf the requirement mentions domain-based SSO login, cover: Google domain disables password and shows Google icon; Microsoft domain disables password and shows Microsoft icon; clicking provider sign-in opens SSO; non-configured domain keeps password login enabled; changing username domain updates login mode; blank/malformed username does not trigger SSO.\n\nRetrieved RAG evidence:\n${formatEvidence(chunks) || "No matching RAG evidence was used. Use the feature requirement and live app context only, and mark reasonable QA assumptions in preconditions where needed."}`,
     },
   ];
 }
@@ -255,6 +282,27 @@ function formatMetadataFields(metadata: Record<string, unknown> | undefined) {
       return `${String(row.originalKey || row.normalizedKey)}: ${String(row.value)}`;
     })
     .join("\n");
+}
+
+function formatRagUsage(usage: Awaited<ReturnType<typeof resolveRagProject>>["usage"]) {
+  if (usage.mode === "used") {
+    return `RAG Project: ${usage.projectName}\nReason: ${usage.reason}\nSource types: ${usage.sourceTypes.join(", ") || "unknown"}`;
+  }
+
+  return `${usage.reason}\nDo not invent source evidence.`;
+}
+
+function formatPageContext(pageContext: Awaited<ReturnType<typeof inspectAppPage>> | null) {
+  if (!pageContext) return "No App URL was provided.";
+  return [
+    `Mode: ${pageContext.mode}`,
+    pageContext.title ? `Title: ${pageContext.title}` : "",
+    pageContext.finalUrl ? `Final URL: ${pageContext.finalUrl}` : "",
+    pageContext.headings?.length ? `Headings: ${pageContext.headings.slice(0, 8).join(" | ")}` : "",
+    pageContext.buttons?.length ? `Buttons: ${pageContext.buttons.slice(0, 12).map((button) => button.text || button.selectorHint).join(" | ")}` : "",
+    pageContext.inputs?.length ? `Inputs: ${pageContext.inputs.slice(0, 12).map((input) => input.label || input.placeholder || input.type).join(" | ")}` : "",
+    pageContext.warnings?.length ? `Warnings: ${pageContext.warnings.join(" ")}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 async function getCurrentMaxTcNumber() {

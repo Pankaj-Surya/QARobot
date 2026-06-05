@@ -3,11 +3,12 @@ import { desc, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { documentChunks, documents } from "../db/schema.js";
+import { documentChunks, documents, ragProjects } from "../db/schema.js";
 import { uploadDocumentObject } from "../lib/document-storage.js";
 import { isSupportedDocument } from "../services/document-processing.js";
 import { retrieveContext, type RetrievedChunk } from "../services/rag-service.js";
 import { generateWithFeatureModel } from "../services/ai-adapter.js";
+import { inferDocumentMapping, sourceTypes } from "../services/rag-projects.js";
 import {
   deleteAllDocumentSources,
   deleteDocumentSource,
@@ -29,12 +30,16 @@ export async function documentsRoutes(app: FastifyInstance) {
         name: documents.name,
         fileType: documents.fileType,
         fileSize: documents.fileSize,
+        ragProjectId: documents.ragProjectId,
+        sourceType: documents.sourceType,
+        ragProjectName: ragProjects.name,
         status: documents.status,
         errorMessage: documents.errorMessage,
         chunkCount: documents.chunkCount,
         createdAt: documents.createdAt,
       })
       .from(documents)
+      .leftJoin(ragProjects, eq(ragProjects.id, documents.ragProjectId))
       .orderBy(desc(documents.createdAt));
 
     return { documents: rows };
@@ -136,7 +141,28 @@ export async function documentsRoutes(app: FastifyInstance) {
       });
     }
 
+    const fieldValue = (name: string) => {
+      const field = file.fields[name] as { value?: unknown } | undefined;
+      return typeof field?.value === "string" ? field.value : "";
+    };
+    const requestedProjectId = fieldValue("ragProjectId") || null;
+    const requestedSourceType = sourceTypes.includes(fieldValue("sourceType") as (typeof sourceTypes)[number])
+      ? fieldValue("sourceType")
+      : undefined;
     const buffer = await file.toBuffer();
+    const textForMapping = buffer.toString("utf8").slice(0, 8000);
+    const mapping = await inferDocumentMapping({
+      fileName: file.filename,
+      text: textForMapping,
+      sourceType: requestedSourceType as (typeof sourceTypes)[number] | undefined,
+    });
+    const finalProjectId = requestedProjectId || mapping.ragProjectId;
+
+    if (!finalProjectId) {
+      return reply.code(400).send({
+        error: "Select or create a RAG Project before uploading. Documents cannot be unassigned because retrieval is grouped by project.",
+      });
+    }
     const r2Key = `documents/${new Date().toISOString().slice(0, 10)}/${nanoid()}-${safeFileName(
       file.filename,
     )}`;
@@ -154,6 +180,8 @@ export async function documentsRoutes(app: FastifyInstance) {
         fileType: file.mimetype || "application/octet-stream",
         fileSize: buffer.byteLength,
         r2Key,
+        ragProjectId: finalProjectId,
+        sourceType: mapping.sourceType,
         status: "processing",
       })
       .returning();
@@ -169,6 +197,32 @@ export async function documentsRoutes(app: FastifyInstance) {
 
   app.post("/ingestion/rebuild", async () => {
     return rebuildDocumentIngestion();
+  });
+
+  app.put("/:id/rag-mapping", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = z
+      .object({
+        ragProjectId: z.string().uuid(),
+        sourceType: z.enum(sourceTypes).optional().default("general"),
+      })
+      .safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Invalid document RAG mapping", details: parsed.error.flatten() });
+    }
+
+    const [project] = await db.select().from(ragProjects).where(eq(ragProjects.id, parsed.data.ragProjectId)).limit(1);
+    if (!project) return reply.code(404).send({ error: "RAG Project not found" });
+
+    const [document] = await db
+      .update(documents)
+      .set({ ragProjectId: parsed.data.ragProjectId, sourceType: parsed.data.sourceType })
+      .where(eq(documents.id, id))
+      .returning();
+
+    if (!document) return reply.code(404).send({ error: "Document not found" });
+    return { document };
   });
 
   app.delete("/", async () => {

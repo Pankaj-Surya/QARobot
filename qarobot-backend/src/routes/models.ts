@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { modelConfigs, modelFeatureSettings } from "../db/schema.js";
-import { encryptSecret } from "../lib/encryption.js";
+import { integrationConfigs, modelConfigs, modelFeatureSettings } from "../db/schema.js";
+import { decryptSecret, encryptSecret } from "../lib/encryption.js";
 import {
   testActiveModelConnection,
   testModelConnectionById,
@@ -29,6 +29,14 @@ const featureSettingSchema = z.object({
 });
 
 const featureKeySchema = z.enum(["document_chat", "test_plan_generator", "test_case_generator", "test_script_generator", "test_healer"]);
+const integrationSchema = z.object({
+  provider: z.enum(["jira", "azure_boards"]),
+  baseUrl: z.string().url().optional().or(z.literal("")),
+  username: z.string().optional().default(""),
+  token: z.string().optional().default(""),
+  projectKey: z.string().optional().default(""),
+  metadata: z.record(z.unknown()).optional().default({}),
+});
 
 export async function modelsRoutes(app: FastifyInstance) {
   app.get("/", async () => {
@@ -245,4 +253,153 @@ export async function modelsRoutes(app: FastifyInstance) {
       });
     }
   });
+
+  app.get("/integrations", async () => {
+    const rows = await db.select().from(integrationConfigs).orderBy(desc(integrationConfigs.updatedAt));
+    return {
+      integrations: rows.map(({ encryptedToken, ...row }) => ({
+        ...row,
+        hasToken: Boolean(encryptedToken),
+      })),
+    };
+  });
+
+  app.put("/integrations/:provider", async (request, reply) => {
+    const provider = z.enum(["jira", "azure_boards"]).safeParse((request.params as { provider?: string }).provider);
+    if (!provider.success) return reply.code(400).send({ error: "Unsupported integration provider." });
+
+    const parsed = integrationSchema.safeParse({ ...(request.body as object), provider: provider.data });
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Invalid integration configuration", details: parsed.error.flatten() });
+    }
+
+    const existing = await db.select().from(integrationConfigs).where(eq(integrationConfigs.key, provider.data)).limit(1);
+    const encryptedToken = parsed.data.token ? encryptSecret(parsed.data.token) : existing[0]?.encryptedToken || null;
+    const [integration] = await db
+      .insert(integrationConfigs)
+      .values({
+        key: provider.data,
+        provider: provider.data,
+        baseUrl: parsed.data.baseUrl || null,
+        username: parsed.data.username || null,
+        encryptedToken,
+        projectKey: parsed.data.projectKey || null,
+        metadata: parsed.data.metadata,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: integrationConfigs.key,
+        set: {
+          baseUrl: parsed.data.baseUrl || null,
+          username: parsed.data.username || null,
+          encryptedToken,
+          projectKey: parsed.data.projectKey || null,
+          metadata: parsed.data.metadata,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    return { integration: { ...integration, encryptedToken: undefined, hasToken: Boolean(integration.encryptedToken) } };
+  });
+
+  app.post("/integrations/:provider/test", async (request, reply) => {
+    const provider = z.enum(["jira", "azure_boards"]).safeParse((request.params as { provider?: string }).provider);
+    if (!provider.success) return reply.code(400).send({ error: "Unsupported integration provider." });
+
+    const [integration] = await db.select().from(integrationConfigs).where(eq(integrationConfigs.key, provider.data)).limit(1);
+    if (!integration || !integration.baseUrl || !integration.encryptedToken) {
+      return reply.code(400).send({ error: "Integration is not configured with a base URL and token." });
+    }
+
+    try {
+      const token = decryptSecret(integration.encryptedToken);
+      const result = await testIntegrationConnection(provider.data, integration.baseUrl, integration.username || "", token);
+      return { status: "connected", ...result };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Integration connection failed." });
+    }
+  });
+
+  app.post("/integrations/:provider/fetch-requirement", async (request, reply) => {
+    const provider = z.enum(["jira", "azure_boards"]).safeParse((request.params as { provider?: string }).provider);
+    if (!provider.success) return reply.code(400).send({ error: "Unsupported integration provider." });
+    const parsed = z.object({ key: z.string().min(1) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Requirement key is required.", details: parsed.error.flatten() });
+
+    const [integration] = await db.select().from(integrationConfigs).where(eq(integrationConfigs.key, provider.data)).limit(1);
+    if (!integration || !integration.baseUrl || !integration.encryptedToken) {
+      return reply.code(400).send({ error: "Integration is not configured with a base URL and token." });
+    }
+
+    try {
+      const token = decryptSecret(integration.encryptedToken);
+      const requirement = await fetchRequirement(provider.data, integration.baseUrl, integration.username || "", token, parsed.data.key);
+      return { requirement };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Requirement fetch failed." });
+    }
+  });
+}
+
+async function testIntegrationConnection(provider: "jira" | "azure_boards", baseUrl: string, username: string, token: string) {
+  const targetUrl = provider === "jira"
+    ? `${baseUrl.replace(/\/$/, "")}/rest/api/3/myself`
+    : `${baseUrl.replace(/\/$/, "")}/_apis/projects?api-version=7.1`;
+  const headers: Record<string, string> = provider === "jira"
+    ? { authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`, accept: "application/json" }
+    : { authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`, accept: "application/json" };
+  const response = await fetch(targetUrl, { headers });
+  if (!response.ok) {
+    throw new Error(`${provider === "jira" ? "Jira" : "Azure Boards"} connection failed with ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  }
+  return { provider, checkedUrl: targetUrl };
+}
+
+async function fetchRequirement(provider: "jira" | "azure_boards", baseUrl: string, username: string, token: string, key: string) {
+  if (provider === "jira") {
+    const targetUrl = `${baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description`;
+    const response = await fetch(targetUrl, {
+      headers: {
+        authorization: `Basic ${Buffer.from(`${username}:${token}`).toString("base64")}`,
+        accept: "application/json",
+      },
+    });
+    if (!response.ok) throw new Error(`Jira requirement fetch failed with ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    const json = await response.json() as { key?: string; fields?: { summary?: string; description?: unknown } };
+    return {
+      key: json.key || key,
+      title: json.fields?.summary || key,
+      text: `${json.fields?.summary || ""}\n${flattenAtlassianDoc(json.fields?.description)}`.trim(),
+      provider,
+    };
+  }
+
+  const targetUrl = `${baseUrl.replace(/\/$/, "")}/_apis/wit/workitems/${encodeURIComponent(key)}?api-version=7.1`;
+  const response = await fetch(targetUrl, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
+      accept: "application/json",
+    },
+  });
+  if (!response.ok) throw new Error(`Azure Boards requirement fetch failed with ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  const json = await response.json() as { id?: number; fields?: Record<string, unknown> };
+  const title = String(json.fields?.["System.Title"] || key);
+  const description = stripHtml(String(json.fields?.["System.Description"] || json.fields?.["Microsoft.VSTS.Common.AcceptanceCriteria"] || ""));
+  return { key: String(json.id || key), title, text: `${title}\n${description}`.trim(), provider };
+}
+
+function flattenAtlassianDoc(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(flattenAtlassianDoc).join("\n");
+  if (typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    return [row.text, flattenAtlassianDoc(row.content)].filter(Boolean).join("\n");
+  }
+  return String(value);
+}
+
+function stripHtml(value: string) {
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }

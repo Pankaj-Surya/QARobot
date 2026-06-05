@@ -2,7 +2,7 @@
 
 import { AppShell } from "@/components/app-shell";
 import { MarkdownPreview } from "@/components/markdown-preview";
-import { apiDelete, apiGet, apiPost, apiUploadWithProgress } from "@/lib/api-client";
+import { apiDelete, apiGet, apiPost, apiPut, apiUploadWithProgress } from "@/lib/api-client";
 import { DatabaseZap, FileText, LoaderCircle, MessageSquare, Send, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -13,11 +13,18 @@ type DocumentRow = {
   name: string;
   fileType: string;
   fileSize: number;
+  ragProjectId: string | null;
+  ragProjectName?: string | null;
+  sourceType: string;
   status: DocumentStatus;
   errorMessage: string | null;
   chunkCount: number;
   createdAt: string;
 };
+
+type RagProject = { id: string; name: string; documentCount: number; sourceTypes: string[] };
+
+const sourceTypes = ["requirement", "testcase", "test_plan", "api_spec", "gherkin", "release_note", "support_doc", "general"];
 
 type DocumentDetail = {
   document: DocumentRow & { r2Key: string };
@@ -78,6 +85,10 @@ type UploadProgress = {
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  const [projects, setProjects] = useState<RagProject[]>([]);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [uploadProjectId, setUploadProjectId] = useState("");
+  const [uploadSourceType, setUploadSourceType] = useState("general");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -96,8 +107,43 @@ export default function DocumentsPage() {
   );
 
   async function loadDocuments() {
-    const result = await apiGet<{ documents: DocumentRow[] }>("/api/documents");
+    const [result, projectsResult] = await Promise.all([
+      apiGet<{ documents: DocumentRow[] }>("/api/documents"),
+      apiGet<{ projects: RagProject[] }>("/api/rag/projects"),
+    ]);
     setDocuments(result.documents);
+    setProjects(projectsResult.projects);
+  }
+
+  async function createProject() {
+    if (!newProjectName.trim()) return;
+    setError(null);
+    try {
+      const result = await apiPost<{ project: RagProject }>("/api/rag/projects", {
+        name: newProjectName.trim(),
+        aliases: [newProjectName.trim()],
+      });
+      setProjects((current) => [{ ...result.project, documentCount: 0, sourceTypes: [] }, ...current]);
+      setUploadProjectId(result.project.id);
+      setNewProjectName("");
+    } catch (createError) {
+      setError(readError(createError));
+    }
+  }
+
+  async function updateDocumentMapping(documentId: string, ragProjectId: string, sourceType: string) {
+    if (!ragProjectId) {
+      setError("Select a RAG Project. Documents cannot be unassigned.");
+      return;
+    }
+    setError(null);
+    try {
+      await apiPut(`/api/documents/${documentId}/rag-mapping`, { ragProjectId, sourceType });
+      await loadDocuments();
+      if (selectedId === documentId) await loadDetail(documentId);
+    } catch (mappingError) {
+      setError(readError(mappingError));
+    }
   }
 
   async function loadDetail(id: string) {
@@ -144,6 +190,8 @@ export default function DocumentsPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      if (uploadProjectId) formData.append("ragProjectId", uploadProjectId);
+      formData.append("sourceType", uploadSourceType);
       const uploaded = await apiUploadWithProgress<{
         document: DocumentRow;
         next: { payload: { documentId: string } };
@@ -340,10 +388,11 @@ export default function DocumentsPage() {
         )}
         <div className="text-sm font-medium">{isUploading ? "Uploading document" : "Drop or choose a document"}</div>
         <p className="mt-2 text-sm text-slate-500">PDF, TXT, CSV, Markdown, JSON, YAML, and Gherkin files are accepted.</p>
+        {!uploadProjectId ? <p className="mt-2 text-sm font-medium text-amber-700">Create or select a RAG Project before uploading.</p> : null}
         <input
           className="sr-only"
           type="file"
-          disabled={isUploading}
+          disabled={isUploading || !uploadProjectId}
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) {
@@ -352,6 +401,32 @@ export default function DocumentsPage() {
           }}
         />
       </label>
+
+      <div className="mt-4 rounded-md border border-line bg-white p-4">
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px_220px_auto] md:items-end">
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">Create RAG Project</span>
+            <input className="w-full rounded-md border border-line px-3 py-2" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Example: BStackDemo" />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">Upload project</span>
+            <select className="w-full rounded-md border border-line px-3 py-2" value={uploadProjectId} onChange={(event) => setUploadProjectId(event.target.value)}>
+              <option value="">Select project</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">Source type</span>
+            <select className="w-full rounded-md border border-line px-3 py-2" value={uploadSourceType} onChange={(event) => setUploadSourceType(event.target.value)}>
+              {sourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <button className="rounded-md bg-action px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={!newProjectName.trim()} onClick={createProject} type="button">
+            Create
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">Use projects to keep product requirements, test cases, plans, and API docs grouped by app/product. Documents cannot be uploaded without a project.</div>
+      </div>
 
       {uploadProgress ? (
         <div className="mt-4 rounded-md border border-line bg-white p-4">
@@ -382,11 +457,12 @@ export default function DocumentsPage() {
 
       <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="overflow-hidden rounded-md border border-line bg-white">
-          <div className="grid grid-cols-[minmax(0,1fr)_120px_100px_120px_70px] border-b border-line px-4 py-3 text-xs font-medium uppercase text-slate-500">
+          <div className="grid grid-cols-[minmax(0,1fr)_150px_130px_100px_80px_70px] border-b border-line px-4 py-3 text-xs font-medium uppercase text-slate-500">
             <span>Name</span>
+            <span>RAG Project</span>
+            <span>Source Type</span>
             <span>Status</span>
             <span>Chunks</span>
-            <span>Uploaded</span>
             <span></span>
           </div>
           {documents.length === 0 ? (
@@ -395,7 +471,7 @@ export default function DocumentsPage() {
             documents.map((document) => (
               <div
                 key={document.id}
-                className="grid w-full grid-cols-[minmax(0,1fr)_120px_100px_120px_70px] items-center border-b border-line px-4 py-3 text-left text-sm last:border-0 hover:bg-slate-50"
+                className="grid w-full grid-cols-[minmax(0,1fr)_150px_130px_100px_80px_70px] items-center gap-2 border-b border-line px-4 py-3 text-left text-sm last:border-0 hover:bg-slate-50"
               >
                 <button
                   className="flex min-w-0 items-center gap-2 text-left"
@@ -404,9 +480,23 @@ export default function DocumentsPage() {
                   <FileText className="shrink-0 text-slate-400" size={16} />
                   <span className="truncate font-medium">{document.name}</span>
                 </button>
+                <select
+                  className="min-w-0 rounded-md border border-line px-2 py-1 text-xs"
+                  value={document.ragProjectId || ""}
+                  onChange={(event) => updateDocumentMapping(document.id, event.target.value, document.sourceType)}
+                >
+                  <option value="">Select project</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+                <select
+                  className="min-w-0 rounded-md border border-line px-2 py-1 text-xs"
+                  value={document.sourceType || "general"}
+                  onChange={(event) => updateDocumentMapping(document.id, document.ragProjectId || "", event.target.value)}
+                >
+                  {sourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
                 <StatusBadge status={document.status} />
                 <span>{document.chunkCount}</span>
-                <span className="text-slate-500">{new Date(document.createdAt).toLocaleDateString()}</span>
                 <button
                   className="flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-60"
                   disabled={deletingDocumentId === document.id}

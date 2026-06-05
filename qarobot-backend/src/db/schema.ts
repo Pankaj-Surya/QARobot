@@ -33,12 +33,24 @@ export const runStatus = pgEnum("run_status", [
   "cancelled",
 ]);
 
+export const ragProjects = pgTable("rag_projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  description: text("description"),
+  domains: jsonb("domains").$type<string[]>().notNull().default([]),
+  aliases: jsonb("aliases").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   fileType: text("file_type").notNull(),
   fileSize: integer("file_size").notNull(),
   r2Key: text("r2_key").notNull(),
+  ragProjectId: uuid("rag_project_id").references(() => ragProjects.id, { onDelete: "set null" }),
+  sourceType: text("source_type").notNull().default("general"),
   status: documentStatus("status").notNull().default("uploading"),
   errorMessage: text("error_message"),
   chunkCount: integer("chunk_count").notNull().default(0),
@@ -74,6 +86,17 @@ export const modelConfigs = pgTable("model_configs", {
 export const modelFeatureSettings = pgTable("model_feature_settings", {
   featureKey: text("feature_key").primaryKey(),
   modelConfigId: uuid("model_config_id").references(() => modelConfigs.id, { onDelete: "cascade" }).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const integrationConfigs = pgTable("integration_configs", {
+  key: text("key").primaryKey(),
+  provider: text("provider").notNull(),
+  baseUrl: text("base_url"),
+  username: text("username"),
+  encryptedToken: text("encrypted_token"),
+  projectKey: text("project_key"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

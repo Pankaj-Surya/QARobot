@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 type TestCase = { id: string; tcId: string; title: string; module: string; createdAt?: string };
 type InputMode = "saved" | "manual";
-type GenerationMode = "llm_dom" | "llm_only" | "deterministic_dom" | "deterministic_only";
+type GenerationMode = "stable_auto" | "llm_dom" | "llm_only" | "deterministic_dom" | "deterministic_only";
 type Script = {
   id: string;
   name: string;
@@ -24,6 +24,8 @@ type Script = {
     domInspectionRequired: boolean;
     domInspectionMode: string;
     deterministicUsed: boolean;
+    validationStatus?: string;
+    validationAttempts?: number;
   };
   manualTestCaseText: string | null;
   pageContext?: { mode?: string; title?: string; warnings?: string[] } | null;
@@ -60,6 +62,11 @@ const TEST_CASES_CHANGED_KEY = "qarobot.testCasesChanged";
 const RECENT_CASE_LIMIT = 20;
 const GENERATION_MODES: Array<{ value: GenerationMode; label: string; description: string }> = [
   {
+    value: "stable_auto",
+    label: "Stable Auto Generate",
+    description: "Recommended. Tries DOM + LLM, degrades gracefully if blocked, then validates with the runner worker when available.",
+  },
+  {
     value: "llm_dom",
     label: "LLM + DOM inspection",
     description: "Requires a tested scripting model and a reachable runner worker for browser DOM inspection.",
@@ -90,7 +97,7 @@ export default function ScriptsPage() {
   const [name, setName] = useState("Generated Playwright Suite");
   const [appUrl, setAppUrl] = useState("http://localhost:3000");
   const [inputMode, setInputMode] = useState<InputMode>("saved");
-  const [generationMode, setGenerationMode] = useState<GenerationMode>("llm_dom");
+  const [generationMode, setGenerationMode] = useState<GenerationMode>("stable_auto");
   const [manualTestCaseText, setManualTestCaseText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isLoadingCases, setIsLoadingCases] = useState(false);
@@ -369,6 +376,12 @@ export default function ScriptsPage() {
                 <div className="mt-1">Generation: {selectedScript.generationMeta?.label || formatGenerationMode(selectedScript.generationMode)}</div>
                 <div className="mt-1 truncate">App: {selectedScript.appUrl || "-"}</div>
                 <div className="mt-1">Page: {selectedScript.pageContext?.title || "Unknown"}</div>
+                {selectedScript.generationMeta?.validationStatus ? (
+                  <div className="mt-1">
+                    Validation: {selectedScript.generationMeta.validationStatus}
+                    {selectedScript.generationMeta.validationAttempts ? ` (${selectedScript.generationMeta.validationAttempts} attempt)` : ""}
+                  </div>
+                ) : null}
                 {selectedScript.generationMeta ? (
                   <div className="mt-1">
                     Model: {selectedScript.generationMeta.modelUsed ? "used" : selectedScript.generationMeta.modelRequired ? "required" : "not required"} · DOM:{" "}

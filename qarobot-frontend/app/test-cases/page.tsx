@@ -19,12 +19,22 @@ type TestCase = {
   automationStatus?: string;
 };
 
+type RagProject = { id: string; name: string; sourceTypes: string[]; documentCount: number };
+type RagUsage = { mode: "used" | "skipped" | "ambiguous"; reason: string; projectName: string | null; sourceTypes: string[]; appUrl: string | null };
+
 const TEST_CASES_CHANGED_KEY = "qarobot.testCasesChanged";
 
 export default function TestCasesPage() {
   const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [projects, setProjects] = useState<RagProject[]>([]);
   const [draftCases, setDraftCases] = useState<TestCase[]>([]);
   const [featureDescription, setFeatureDescription] = useState("");
+  const [appUrl, setAppUrl] = useState("");
+  const [ragProjectId, setRagProjectId] = useState("");
+  const [ragUsage, setRagUsage] = useState<RagUsage | null>(null);
+  const [requirementProvider, setRequirementProvider] = useState<"jira" | "azure_boards">("jira");
+  const [requirementKey, setRequirementKey] = useState("");
+  const [isFetchingRequirement, setIsFetchingRequirement] = useState(false);
   const [count, setCount] = useState(5);
   const [mode, setMode] = useState("balanced");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -33,8 +43,12 @@ export default function TestCasesPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function loadData() {
-    const casesResult = await apiGet<{ testCases: TestCase[] }>("/api/test-cases");
+    const [casesResult, projectsResult] = await Promise.all([
+      apiGet<{ testCases: TestCase[] }>("/api/test-cases"),
+      apiGet<{ projects: RagProject[] }>("/api/rag/projects"),
+    ]);
     setTestCases(casesResult.testCases);
+    setProjects(projectsResult.projects);
   }
 
   useEffect(() => {
@@ -47,17 +61,36 @@ export default function TestCasesPage() {
     setIsGenerating(true);
 
     try {
-      const result = await apiPost<{ cases: TestCase[] }>("/api/test-cases/generate", {
+      const result = await apiPost<{ cases: TestCase[]; ragUsage: RagUsage }>("/api/test-cases/generate", {
         featureDescription,
+        appUrl: appUrl.trim() || undefined,
+        ragProjectId: ragProjectId || undefined,
         count,
         mode,
       });
       setDraftCases(result.cases);
-      setMessage("Draft test cases generated.");
+      setRagUsage(result.ragUsage);
+      setMessage(result.ragUsage.mode === "used" ? "Draft test cases generated from matched RAG Project evidence." : result.ragUsage.reason);
     } catch (generateError) {
       setError(readError(generateError));
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function fetchRequirement() {
+    if (!requirementKey.trim()) return;
+    setError(null);
+    setMessage(null);
+    setIsFetchingRequirement(true);
+    try {
+      const result = await apiPost<{ requirement: { text: string } }>(`/api/models/integrations/${requirementProvider}/fetch-requirement`, { key: requirementKey.trim() });
+      setFeatureDescription(result.requirement.text);
+      setMessage(`Fetched requirement from ${requirementProvider === "jira" ? "Jira" : "Azure Boards"}.`);
+    } catch (fetchError) {
+      setError(readError(fetchError));
+    } finally {
+      setIsFetchingRequirement(false);
     }
   }
 
@@ -102,6 +135,40 @@ export default function TestCasesPage() {
                 The feature description is the requirement. The backend retrieves relevant evidence from the ingested knowledge base before calling the selected LLM.
               </span>
             </label>
+            <div className="rounded-md border border-line p-3">
+              <div className="mb-2 text-sm font-medium">Fetch requirement optional</div>
+              <div className="grid gap-2 md:grid-cols-[130px_minmax(0,1fr)]">
+                <select className="rounded-md border border-line px-3 py-2 text-sm" value={requirementProvider} onChange={(event) => setRequirementProvider(event.target.value as "jira" | "azure_boards")}>
+                  <option value="jira">Jira</option>
+                  <option value="azure_boards">Azure Boards</option>
+                </select>
+                <input className="rounded-md border border-line px-3 py-2 text-sm" value={requirementKey} onChange={(event) => setRequirementKey(event.target.value)} placeholder="Issue key or work item ID" />
+              </div>
+              <button className="mt-2 rounded-md border border-line px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-60" disabled={isFetchingRequirement || !requirementKey.trim()} onClick={fetchRequirement} type="button">
+                {isFetchingRequirement ? "Fetching..." : "Fetch into requirement"}
+              </button>
+            </div>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">App URL optional</span>
+              <input
+                className="w-full rounded-md border border-line px-3 py-2"
+                value={appUrl}
+                onChange={(event) => setAppUrl(event.target.value)}
+                placeholder="https://your-app.example.com"
+              />
+              <span className="mt-2 block text-xs text-slate-500">Helps match the right RAG Project. Leave blank when generating only from requirement or selected project.</span>
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">RAG Project</span>
+              <select className="w-full rounded-md border border-line px-3 py-2" value={ragProjectId} onChange={(event) => setRagProjectId(event.target.value)}>
+                <option value="">Auto / requirement only if no safe match</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name} ({project.documentCount})
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-sm">
                 <span className="mb-1 block font-medium">Count</span>
@@ -134,6 +201,7 @@ export default function TestCasesPage() {
               </button>
             ) : null}
           </div>
+          {draftCases.length > 0 && ragUsage ? <RagUsageBanner usage={ragUsage} /> : null}
           <TestCaseTable cases={draftCases.length > 0 ? draftCases : testCases} />
         </section>
       </div>
@@ -141,6 +209,16 @@ export default function TestCasesPage() {
       {message ? <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
       {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
     </AppShell>
+  );
+}
+
+function RagUsageBanner({ usage }: { usage: RagUsage }) {
+  return (
+    <div className={`border-b border-line px-5 py-3 text-sm ${usage.mode === "used" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+      <div className="font-semibold">{usage.mode === "used" ? `RAG used: ${usage.projectName}` : "RAG skipped"}</div>
+      <div className="mt-1">{usage.reason}</div>
+      {usage.sourceTypes.length > 0 ? <div className="mt-1 text-xs">Source types: {usage.sourceTypes.join(", ")}</div> : null}
+    </div>
   );
 }
 

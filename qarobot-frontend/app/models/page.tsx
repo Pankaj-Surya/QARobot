@@ -38,6 +38,14 @@ type FeatureSetting = {
 };
 
 type FeatureKey = "document_chat" | "test_plan_generator" | "test_case_generator" | "test_script_generator" | "test_healer";
+type Integration = {
+  key: "jira" | "azure_boards";
+  provider: "jira" | "azure_boards";
+  baseUrl: string | null;
+  username: string | null;
+  projectKey: string | null;
+  hasToken: boolean;
+};
 
 const featureOptions: Array<{ key: FeatureKey; label: string }> = [
   { key: "document_chat", label: "Document Chat" },
@@ -68,16 +76,29 @@ export default function ModelsPage() {
     test_healer: "",
   });
   const [savingFeatureKey, setSavingFeatureKey] = useState<FeatureKey | null>(null);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [integrationForms, setIntegrationForms] = useState<Record<Integration["key"], { baseUrl: string; username: string; token: string; projectKey: string }>>({
+    jira: { baseUrl: "", username: "", token: "", projectKey: "" },
+    azure_boards: { baseUrl: "", username: "", token: "", projectKey: "" },
+  });
+  const [savingIntegration, setSavingIntegration] = useState<Integration["key"] | null>(null);
+  const [testingIntegration, setTestingIntegration] = useState<Integration["key"] | null>(null);
 
   const isOllama = providerName.toLowerCase() === "ollama";
 
   async function loadModels() {
-    const [modelsResult, settingsResult] = await Promise.all([
+    const [modelsResult, settingsResult, integrationsResult] = await Promise.all([
       apiGet<{ models: ModelConfig[] }>("/api/models"),
       apiGet<{ settings: FeatureSetting[] }>("/api/models/feature-settings"),
+      apiGet<{ integrations: Integration[] }>("/api/models/integrations"),
     ]);
     setModels(modelsResult.models);
     setFeatureSettings(settingsResult.settings);
+    setIntegrations(integrationsResult.integrations);
+    setIntegrationForms((current) => ({
+      jira: hydrateIntegrationForm(current.jira, integrationsResult.integrations.find((item) => item.key === "jira")),
+      azure_boards: hydrateIntegrationForm(current.azure_boards, integrationsResult.integrations.find((item) => item.key === "azure_boards")),
+    }));
     setFeatureModelIds({
       document_chat: findFeatureModelId(settingsResult.settings, "document_chat"),
       test_plan_generator: findFeatureModelId(settingsResult.settings, "test_plan_generator"),
@@ -180,6 +201,36 @@ export default function ModelsPage() {
       setError(readError(settingError));
     } finally {
       setSavingFeatureKey(null);
+    }
+  }
+
+  async function saveIntegration(provider: Integration["key"]) {
+    setError(null);
+    setMessage(null);
+    setSavingIntegration(provider);
+    try {
+      const form = integrationForms[provider];
+      await apiPut(`/api/models/integrations/${provider}`, form);
+      setMessage(`${integrationLabel(provider)} integration saved.`);
+      await loadModels();
+    } catch (integrationError) {
+      setError(readError(integrationError));
+    } finally {
+      setSavingIntegration(null);
+    }
+  }
+
+  async function testIntegration(provider: Integration["key"]) {
+    setError(null);
+    setMessage(null);
+    setTestingIntegration(provider);
+    try {
+      const result = await apiPost<{ status: string; checkedUrl: string }>(`/api/models/integrations/${provider}/test`, {});
+      setMessage(`${integrationLabel(provider)} ${result.status}. Checked ${result.checkedUrl}`);
+    } catch (integrationError) {
+      setError(readError(integrationError));
+    } finally {
+      setTestingIntegration(null);
     }
   }
 
@@ -382,6 +433,41 @@ export default function ModelsPage() {
             </div>
           )}
           </section>
+
+          <section className="rounded-md border border-line bg-white p-5">
+            <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+              <PlugZap size={17} />
+              Work Item Integrations
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {(["jira", "azure_boards"] as const).map((provider) => {
+                const saved = integrations.find((item) => item.key === provider);
+                const form = integrationForms[provider];
+                return (
+                  <div key={provider} className="rounded-md border border-line p-4">
+                    <div className="text-sm font-semibold">{integrationLabel(provider)}</div>
+                    <div className="mt-3 space-y-3">
+                      <input className="w-full rounded-md border border-line px-3 py-2 text-sm" value={form.baseUrl} onChange={(event) => setIntegrationForms((current) => ({ ...current, [provider]: { ...current[provider], baseUrl: event.target.value } }))} placeholder={provider === "jira" ? "https://your-domain.atlassian.net" : "https://dev.azure.com/org/project"} />
+                      <input className="w-full rounded-md border border-line px-3 py-2 text-sm" value={form.username} onChange={(event) => setIntegrationForms((current) => ({ ...current, [provider]: { ...current[provider], username: event.target.value } }))} placeholder={provider === "jira" ? "Email / username" : "Optional username"} />
+                      <input className="w-full rounded-md border border-line px-3 py-2 text-sm" type="password" value={form.token} onChange={(event) => setIntegrationForms((current) => ({ ...current, [provider]: { ...current[provider], token: event.target.value } }))} placeholder={saved?.hasToken ? "Token already saved; enter only to replace" : "API token / PAT"} />
+                      <input className="w-full rounded-md border border-line px-3 py-2 text-sm" value={form.projectKey} onChange={(event) => setIntegrationForms((current) => ({ ...current, [provider]: { ...current[provider], projectKey: event.target.value } }))} placeholder="Project key optional" />
+                      <div className="flex gap-2">
+                        <button className="flex items-center gap-2 rounded-md bg-action px-3 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={savingIntegration === provider} onClick={() => saveIntegration(provider)}>
+                          {savingIntegration === provider ? <LoaderCircle className="animate-spin" size={14} /> : <Save size={14} />}
+                          Save
+                        </button>
+                        <button className="flex items-center gap-2 rounded-md border border-line px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-60" disabled={testingIntegration === provider || !saved?.hasToken} onClick={() => testIntegration(provider)}>
+                          {testingIntegration === provider ? <LoaderCircle className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
+                          Test
+                        </button>
+                      </div>
+                      <div className="text-xs text-slate-500">{saved?.hasToken ? "Token stored encrypted." : "Not configured yet."}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
       </div>
 
@@ -401,4 +487,20 @@ function findFeatureModelId(settings: FeatureSetting[], featureKey: FeatureKey) 
 
 function featureLabel(featureKey: FeatureKey) {
   return featureOptions.find((feature) => feature.key === featureKey)?.label || featureKey;
+}
+
+function integrationLabel(provider: Integration["key"]) {
+  return provider === "jira" ? "Jira" : "Azure Boards";
+}
+
+function hydrateIntegrationForm(
+  current: { baseUrl: string; username: string; token: string; projectKey: string },
+  integration?: Integration,
+) {
+  return {
+    baseUrl: integration?.baseUrl || current.baseUrl,
+    username: integration?.username || current.username,
+    token: "",
+    projectKey: integration?.projectKey || current.projectKey,
+  };
 }

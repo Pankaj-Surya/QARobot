@@ -47,6 +47,7 @@ export async function downloadCloudinaryObject(key: string) {
     resource_type: "raw",
     secure: true,
     type: "upload",
+    sign_url: true,
   });
 
   const response = await fetch(url);

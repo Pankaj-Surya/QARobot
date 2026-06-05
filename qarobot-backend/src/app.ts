@@ -8,6 +8,7 @@ import { testCasesRoutes } from "./routes/test-cases.js";
 import { scriptsRoutes } from "./routes/scripts.js";
 import { runsRoutes } from "./routes/runner.js";
 import { healerRoutes } from "./routes/healer.js";
+import { ragRoutes } from "./routes/rag.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -50,6 +51,7 @@ export async function buildApp() {
   await app.register(scriptsRoutes, { prefix: "/api/scripts" });
   await app.register(runsRoutes, { prefix: "/api/runs" });
   await app.register(healerRoutes, { prefix: "/api/healer" });
+  await app.register(ragRoutes, { prefix: "/api/rag" });
 
   return app;
 }
