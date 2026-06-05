@@ -5,7 +5,7 @@ import { db } from "../db/client.js";
 import { testCases } from "../db/schema.js";
 import { retrieveContext } from "../services/rag-service.js";
 import { generateWithFeatureModel, type ChatMessage } from "../services/ai-adapter.js";
-import { inspectAppPage } from "../services/page-inspection.js";
+import { inspectAppPage, inspectConfiguredAppPage } from "../services/page-inspection.js";
 import { resolveRagProject } from "../services/rag-projects.js";
 
 const generateCasesSchema = z.object({
@@ -87,7 +87,7 @@ export async function testCasesRoutes(app: FastifyInstance) {
     const context = projectContext.documentIds.length > 0
       ? await retrieveContext(featureDescription, projectContext.documentIds, { topK: Math.max(count, 6), intent: "test_case" })
       : { chunks: [], retrieval: undefined };
-    const pageContext = appUrl ? await inspectAppPage(appUrl) : null;
+    const pageContext = appUrl ? await inspectConfiguredAppPage(appUrl) : null;
 
     try {
       const messages = buildCaseGenerationMessages(featureDescription, mode, count, context.chunks, {
@@ -142,7 +142,7 @@ function buildCaseGenerationMessages(
     {
       role: "system",
       content:
-        'You are a senior QA engineer. Generate only valid JSON. The feature description is the primary source requirement. Retrieved RAG evidence is grounding/context only and must not replace the requirement. Return exactly one JSON object with shape {"cases":[...]}. Do not use markdown, comments, trailing commas, or extra text.',
+        'You are a senior QA engineer. Generate only valid JSON. The feature description is the primary source requirement. If an App URL live context is provided, use the inspected page title, controls, forms, links, inputs, and visible text to make cases realistic for that application. Retrieved RAG evidence is grounding/context only and must not replace the requirement. Return exactly one JSON object with shape {"cases":[...]}. Do not use markdown, comments, trailing commas, or extra text.',
     },
     {
       role: "user",

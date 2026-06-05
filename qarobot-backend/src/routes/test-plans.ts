@@ -5,7 +5,7 @@ import { db } from "../db/client.js";
 import { testPlans } from "../db/schema.js";
 import { retrieveContext } from "../services/rag-service.js";
 import { generateWithFeatureModel } from "../services/ai-adapter.js";
-import { inspectAppPage } from "../services/page-inspection.js";
+import { inspectAppPage, inspectConfiguredAppPage } from "../services/page-inspection.js";
 import { resolveRagProject } from "../services/rag-projects.js";
 
 const generatePlanSchema = z.object({
@@ -52,7 +52,7 @@ export async function testPlansRoutes(app: FastifyInstance) {
     const context = projectContext.documentIds.length > 0
       ? await retrieveContext(body.scope, projectContext.documentIds, { topK: 8, intent: "test_plan" })
       : { chunks: [], retrieval: undefined };
-    const pageContext = body.appUrl ? await inspectAppPage(body.appUrl) : null;
+    const pageContext = body.appUrl ? await inspectConfiguredAppPage(body.appUrl) : null;
 
     let content: string;
     try {
@@ -60,7 +60,7 @@ export async function testPlansRoutes(app: FastifyInstance) {
         {
           role: "system",
           content:
-            "You are a senior QA test manager. Generate a standard, readable QA test plan in Markdown. The user's scope is the primary requirement. Retrieved RAG evidence is grounding/context and must not replace the scope. Do not include retrieval scores, chunk ids, or technical metadata. If evidence is weak, still produce a useful plan from the scope and clearly mark assumptions and missing requirement areas.",
+            "You are a senior QA test manager. Generate a standard, readable QA test plan in Markdown. The user's scope is the primary requirement. If an App URL live context is provided, use the inspected page title, visible UI, controls, forms, links, and warnings to shape scope, scenarios, risks, environment assumptions, and UI coverage. Retrieved RAG evidence is grounding/context and must not replace the scope. Do not include retrieval scores, chunk ids, or technical metadata. If evidence is weak, still produce a useful plan from the scope and live app context and clearly mark assumptions and missing requirement areas.",
         },
         {
           role: "user",

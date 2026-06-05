@@ -1,3 +1,7 @@
+import { eq } from "drizzle-orm";
+import { db } from "../db/client.js";
+import { runnerSettings } from "../db/schema.js";
+
 export type PageInspectionContext = {
   mode: "static_html" | "external_browser" | "unavailable";
   requestedUrl: string;
@@ -19,6 +23,11 @@ export async function inspectAppPage(appUrl: string, preferredWorkerUrl?: string
   }
 
   return inspectWithFetch(appUrl);
+}
+
+export async function inspectConfiguredAppPage(appUrl: string): Promise<PageInspectionContext> {
+  const [settings] = await db.select().from(runnerSettings).where(eq(runnerSettings.key, "default")).limit(1);
+  return inspectAppPage(appUrl, settings?.workerUrl || process.env.PAGE_INSPECTION_WORKER_URL || "");
 }
 
 async function inspectWithExternalWorker(appUrl: string, workerUrl: string): Promise<PageInspectionContext | null> {

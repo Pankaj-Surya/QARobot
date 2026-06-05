@@ -16,6 +16,7 @@ type TestPlan = {
 
 type RagProject = { id: string; name: string; sourceTypes: string[]; documentCount: number };
 type RagUsage = { mode: "used" | "skipped" | "ambiguous"; reason: string; projectName: string | null; sourceTypes: string[]; appUrl: string | null };
+type LiveAppContext = { mode: string; title?: string; finalUrl?: string; warnings?: string[] };
 
 export default function TestPlansPage() {
   const [plans, setPlans] = useState<TestPlan[]>([]);
@@ -25,6 +26,7 @@ export default function TestPlansPage() {
   const [appUrl, setAppUrl] = useState("");
   const [ragProjectId, setRagProjectId] = useState("");
   const [ragUsage, setRagUsage] = useState<RagUsage | null>(null);
+  const [liveAppContext, setLiveAppContext] = useState<LiveAppContext | null>(null);
   const [requirementProvider, setRequirementProvider] = useState<"jira" | "azure_boards">("jira");
   const [requirementKey, setRequirementKey] = useState("");
   const [isFetchingRequirement, setIsFetchingRequirement] = useState(false);
@@ -54,7 +56,7 @@ export default function TestPlansPage() {
     setIsGenerating(true);
 
     try {
-      const result = await apiPost<{ content: string; ragUsage: RagUsage }>("/api/test-plans/generate", {
+      const result = await apiPost<{ content: string; ragUsage: RagUsage; liveAppContext: LiveAppContext | null }>("/api/test-plans/generate", {
         name,
         scope,
         appUrl: appUrl.trim() || undefined,
@@ -62,6 +64,7 @@ export default function TestPlansPage() {
       });
       setDraft(result.content);
       setRagUsage(result.ragUsage);
+      setLiveAppContext(result.liveAppContext);
       setDraftMode("preview");
       setMessage(result.ragUsage.mode === "used" ? "Draft generated from scope and matched RAG Project evidence." : result.ragUsage.reason);
     } catch (generateError) {
@@ -217,6 +220,7 @@ export default function TestPlansPage() {
             </div>
           </div>
           {ragUsage ? <RagUsageBanner usage={ragUsage} /> : null}
+          {liveAppContext ? <LiveAppBanner context={liveAppContext} /> : null}
           {draftMode === "preview" ? (
             <div className="h-[520px] overflow-auto p-5">
               <MarkdownPreview content={draft} emptyText="Generated plan preview appears here." />
@@ -269,6 +273,16 @@ function RagUsageBanner({ usage }: { usage: RagUsage }) {
       <div className="font-semibold">{usage.mode === "used" ? `RAG used: ${usage.projectName}` : "RAG skipped"}</div>
       <div className="mt-1">{usage.reason}</div>
       {usage.sourceTypes.length > 0 ? <div className="mt-1 text-xs">Source types: {usage.sourceTypes.join(", ")}</div> : null}
+    </div>
+  );
+}
+
+function LiveAppBanner({ context }: { context: LiveAppContext }) {
+  return (
+    <div className={`border-b border-line px-5 py-3 text-sm ${context.mode === "external_browser" ? "bg-blue-50 text-blue-800" : "bg-slate-50 text-slate-700"}`}>
+      <div className="font-semibold">Live app context: {context.mode === "external_browser" ? "browser inspection" : context.mode}</div>
+      <div className="mt-1">{context.title || context.finalUrl || "App URL was inspected for generation context."}</div>
+      {context.warnings?.length ? <div className="mt-1 text-xs">{context.warnings.join(" ")}</div> : null}
     </div>
   );
 }
