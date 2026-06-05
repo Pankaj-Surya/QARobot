@@ -146,6 +146,7 @@ export async function documentsRoutes(app: FastifyInstance) {
       return typeof field?.value === "string" ? field.value : "";
     };
     const requestedProjectId = fieldValue("ragProjectId") || null;
+    const requestedProjectName = fieldValue("ragProjectName").trim();
     const requestedSourceType = sourceTypes.includes(fieldValue("sourceType") as (typeof sourceTypes)[number])
       ? fieldValue("sourceType")
       : undefined;
@@ -156,7 +157,7 @@ export async function documentsRoutes(app: FastifyInstance) {
       text: textForMapping,
       sourceType: requestedSourceType as (typeof sourceTypes)[number] | undefined,
     });
-    const finalProjectId = requestedProjectId || mapping.ragProjectId;
+    const finalProjectId = requestedProjectId || await resolveUploadProjectId(requestedProjectName) || mapping.ragProjectId;
 
     if (!finalProjectId) {
       return reply.code(400).send({
@@ -270,6 +271,23 @@ export async function documentsRoutes(app: FastifyInstance) {
 
 function safeFileName(fileName: string) {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+}
+
+async function resolveUploadProjectId(projectName: string) {
+  if (projectName) {
+    const existing = await db.select().from(ragProjects);
+    const matched = existing.find((project) => project.name.trim().toLowerCase() === projectName.toLowerCase());
+    if (matched) return matched.id;
+
+    const [created] = await db
+      .insert(ragProjects)
+      .values({ name: projectName, aliases: [projectName], updatedAt: new Date() })
+      .returning();
+    return created.id;
+  }
+
+  const projects = await db.select().from(ragProjects);
+  return projects.length === 1 ? projects[0].id : null;
 }
 
 function formatEvidence(chunks: RetrievedChunk[]) {

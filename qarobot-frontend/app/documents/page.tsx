@@ -115,22 +115,6 @@ export default function DocumentsPage() {
     setProjects(dedupeProjects(projectsResult.projects));
   }
 
-  async function createProject() {
-    if (!newProjectName.trim()) return;
-    setError(null);
-    try {
-      const result = await apiPost<{ project: RagProject }>("/api/rag/projects", {
-        name: newProjectName.trim(),
-        aliases: [newProjectName.trim()],
-      });
-      setProjects((current) => dedupeProjects([{ ...result.project, documentCount: 0, sourceTypes: [] }, ...current]));
-      setUploadProjectId(result.project.id);
-      setNewProjectName("");
-    } catch (createError) {
-      setError(readError(createError));
-    }
-  }
-
   async function updateDocumentMapping(documentId: string, ragProjectId: string, sourceType: string) {
     if (!ragProjectId) {
       setError("Select a RAG Project. Documents cannot be unassigned.");
@@ -192,6 +176,7 @@ export default function DocumentsPage() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("ragProjectId", resolvedProjectId);
+      formData.append("ragProjectName", selectedUploadProjectName());
       formData.append("sourceType", uploadSourceType);
       const uploaded = await apiUploadWithProgress<{
         document: DocumentRow;
@@ -266,6 +251,10 @@ export default function DocumentsPage() {
         setUploadProgress((current) => (current?.phase === "Ingestion complete" ? null : current));
       }, 3500);
     }
+  }
+
+  function selectedUploadProjectName() {
+    return projects.find((project) => project.id === uploadProjectId)?.name || newProjectName.trim();
   }
 
   async function ensureUploadProject() {
@@ -407,30 +396,8 @@ export default function DocumentsPage() {
           </button>
         </div>
       </div>
-      <label className="block rounded-md border border-dashed border-slate-300 bg-white p-8 text-center transition hover:border-action">
-        {isUploading ? (
-          <LoaderCircle className="mx-auto mb-3 animate-spin text-action" size={28} />
-        ) : (
-          <Upload className="mx-auto mb-3 text-action" size={28} />
-        )}
-        <div className="text-sm font-medium">{isUploading ? "Uploading document" : "Drop or choose a document"}</div>
-        <p className="mt-2 text-sm text-slate-500">PDF, TXT, CSV, Markdown, JSON, YAML, and Gherkin files are accepted.</p>
-        {!uploadProjectId && !newProjectName.trim() ? <p className="mt-2 text-sm font-medium text-amber-700">Select a RAG Project or enter a new project name before uploading.</p> : null}
-        <input
-          className="sr-only"
-          type="file"
-          disabled={isUploading || (!uploadProjectId && !newProjectName.trim())}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) {
-              handleUpload(file);
-            }
-          }}
-        />
-      </label>
-
-      <div className="mt-4 rounded-md border border-line bg-white p-4">
-        <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)_220px_auto] md:items-end">
+      <section className="rounded-md border border-line bg-white p-4">
+        <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)_220px] md:items-end">
           <label className="block text-sm">
             <span className="mb-1 block font-medium text-slate-700">RAG Project</span>
             <select className="w-full rounded-md border border-line px-3 py-2" value={uploadProjectId} onChange={(event) => { setUploadProjectId(event.target.value); if (event.target.value) setNewProjectName(""); }}>
@@ -448,12 +415,34 @@ export default function DocumentsPage() {
               {sourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
             </select>
           </label>
-          <button className="rounded-md bg-action px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={!newProjectName.trim()} onClick={createProject} type="button">
-            Create
-          </button>
         </div>
         <div className="mt-2 text-xs text-slate-500">Select an existing project or type a new project name. Upload will use that project and then run the RAG ingestion pipeline.</div>
-      </div>
+
+        <label className={`mt-4 block rounded-md border border-dashed p-8 text-center transition ${uploadProjectId || newProjectName.trim() ? "border-slate-300 hover:border-action" : "border-amber-200 bg-amber-50"}`}>
+          {isUploading ? (
+            <LoaderCircle className="mx-auto mb-3 animate-spin text-action" size={28} />
+          ) : (
+            <Upload className="mx-auto mb-3 text-action" size={28} />
+          )}
+          <div className="text-sm font-medium">{isUploading ? "Uploading document" : "Upload document to selected RAG Project"}</div>
+          <p className="mt-2 text-sm text-slate-500">
+            Project: {selectedUploadProjectName() || "not selected"} - Source type: {uploadSourceType}
+          </p>
+          {!uploadProjectId && !newProjectName.trim() ? <p className="mt-2 text-sm font-medium text-amber-700">Select a RAG Project or enter a new project name before uploading.</p> : null}
+          <input
+            className="sr-only"
+            type="file"
+            disabled={isUploading || (!uploadProjectId && !newProjectName.trim())}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                handleUpload(file);
+              }
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+      </section>
 
       {uploadProgress ? (
         <div className="mt-4 rounded-md border border-line bg-white p-4">
