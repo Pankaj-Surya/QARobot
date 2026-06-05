@@ -174,10 +174,10 @@ export default function DocumentsPage() {
     try {
       const resolvedProjectId = await ensureUploadProject();
       const formData = new FormData();
-      formData.append("file", file);
       formData.append("ragProjectId", resolvedProjectId);
       formData.append("ragProjectName", selectedUploadProjectName());
       formData.append("sourceType", uploadSourceType);
+      formData.append("file", file);
       const uploaded = await apiUploadWithProgress<{
         document: DocumentRow;
         next: { payload: { documentId: string } };

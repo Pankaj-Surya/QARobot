@@ -129,31 +129,42 @@ export async function documentsRoutes(app: FastifyInstance) {
   });
 
   app.post("/upload", async (request, reply) => {
-    const file = await request.file();
+    const fields: Record<string, string> = {};
+    let uploadedFile: { filename: string; mimetype: string; buffer: Buffer } | null = null;
 
-    if (!file) {
+    for await (const part of request.parts()) {
+      if (part.type === "file") {
+        uploadedFile = {
+          filename: part.filename,
+          mimetype: part.mimetype,
+          buffer: await part.toBuffer(),
+        };
+        continue;
+      }
+
+      fields[part.fieldname] = typeof part.value === "string" ? part.value : String(part.value ?? "");
+    }
+
+    if (!uploadedFile) {
       return reply.code(400).send({ error: "Multipart upload must include a file field." });
     }
 
-    if (!isSupportedDocument(file.mimetype, file.filename)) {
+    if (!isSupportedDocument(uploadedFile.mimetype, uploadedFile.filename)) {
       return reply.code(415).send({
         error: "Unsupported file type. Upload PDF, TXT, CSV, Markdown, JSON, YAML, or Gherkin files.",
       });
     }
 
-    const fieldValue = (name: string) => {
-      const field = file.fields[name] as { value?: unknown } | undefined;
-      return typeof field?.value === "string" ? field.value : "";
-    };
+    const fieldValue = (name: string) => fields[name] || "";
     const requestedProjectId = fieldValue("ragProjectId") || null;
     const requestedProjectName = fieldValue("ragProjectName").trim();
     const requestedSourceType = sourceTypes.includes(fieldValue("sourceType") as (typeof sourceTypes)[number])
       ? fieldValue("sourceType")
       : undefined;
-    const buffer = await file.toBuffer();
+    const buffer = uploadedFile.buffer;
     const textForMapping = buffer.toString("utf8").slice(0, 8000);
     const mapping = await inferDocumentMapping({
-      fileName: file.filename,
+      fileName: uploadedFile.filename,
       text: textForMapping,
       sourceType: requestedSourceType as (typeof sourceTypes)[number] | undefined,
     });
@@ -165,20 +176,20 @@ export async function documentsRoutes(app: FastifyInstance) {
       });
     }
     const r2Key = `documents/${new Date().toISOString().slice(0, 10)}/${nanoid()}-${safeFileName(
-      file.filename,
+      uploadedFile.filename,
     )}`;
 
     await uploadDocumentObject({
       key: r2Key,
       body: buffer,
-      contentType: file.mimetype || "application/octet-stream",
+      contentType: uploadedFile.mimetype || "application/octet-stream",
     });
 
     const [document] = await db
       .insert(documents)
       .values({
-        name: file.filename,
-        fileType: file.mimetype || "application/octet-stream",
+        name: uploadedFile.filename,
+        fileType: uploadedFile.mimetype || "application/octet-stream",
         fileSize: buffer.byteLength,
         r2Key,
         ragProjectId: finalProjectId,
